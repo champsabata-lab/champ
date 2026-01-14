@@ -20,13 +20,8 @@ const Dashboard: React.FC<DashboardProps> = ({ orders, products, stores, influen
 
   // Modern Trade Specific Stats
   const mtConfirmedOrders = orders.filter(o => o.status === 'confirmed' && o.storeName);
-  const mtTotalItems = mtConfirmedOrders.reduce((sum, o) => sum + o.quantity, 0);
-  
-  const mtTotalValue = mtConfirmedOrders.reduce((sum, o) => {
-    const product = products.find(p => p.id === o.productId);
-    const price = product?.unitPrice || 0;
-    return sum + (o.quantity * price);
-  }, 0);
+  const mtTotalItems = mtConfirmedOrders.reduce((sum, o) => sum + o.items.reduce((acc, item) => acc + item.quantity, 0), 0);
+  const mtTotalValue = mtConfirmedOrders.reduce((sum, o) => sum + o.totalValue, 0);
 
   const pieData = [
     { name: 'รอดำเนินการ', value: pendingCount, color: '#f59e0b' },
@@ -122,16 +117,7 @@ const Dashboard: React.FC<DashboardProps> = ({ orders, products, stores, influen
         </div>
       </div>
 
-      {/* Reporting Section at the Bottom */}
       <div className="pt-10">
-        <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
-          <div>
-             <span className="bg-slate-200 text-slate-600 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mb-2 inline-block">Bottom System Control</span>
-             <h2 className="text-3xl font-black text-slate-900 tracking-tighter">System-Wide Reporting</h2>
-          </div>
-          <p className="text-slate-400 text-sm max-w-sm">Use this section to quickly extract all records. Filter by date, staff, or product categories instantly.</p>
-        </div>
-        
         <ReportingModule 
           orders={orders} 
           products={products} 

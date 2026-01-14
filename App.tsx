@@ -1,1877 +1,1512 @@
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import AiChat from './components/AiChat';
 import ExportReports from './components/ExportReports';
 import NewsAnnouncement from './components/NewsAnnouncement';
-import { View, UserRole, Order, Product, OrderStatus, InventoryType, Store, UserAccount, Influencer, OrderSource } from './types';
-import { INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_STORES, INITIAL_USERS, INITIAL_INFLUENCERS, USER_ROLES, ALL_VIEWS, PURCHASING_VIEWS } from './constants';
-import { analyzeStockConflict } from './services/geminiService';
+import { View, Order, Product, Store, UserAccount, Influencer, OrderItem, OrderSource, OrderStatus, Announcement } from './types';
+import { INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_STORES, INITIAL_USERS, INITIAL_INFLUENCERS, INITIAL_ANNOUNCEMENTS, ALL_VIEWS, PURCHASING_VIEWS, PRODUCT_CATEGORIES } from './constants';
 
-interface DraftItem {
-  quantity: number;
-}
-
-const LEAD_TIME_OPTIONS = [
-  '1 day',
-  '1 week',
-  '2 weeks',
-  '1 month',
-  '3 months',
-  '7 months',
-  '1 year'
-];
+type SubView = 'history' | 'create' | 'details' | 'manage_inventory' | 'add_product';
+type WarehouseSubView = 'pending' | 'fulfillment_history';
 
 const App: React.FC = () => {
   // Auth State
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginEmail, setLoginEmail] = useState('admin@laglace.com');
+  const [loginPassword, setLoginPassword] = useState('password123');
   const [loginError, setLoginError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [loginBg, setLoginBg] = useState<string | null>(null);
 
+  // Core Data State
   const [activeView, setActiveView] = useState<View>(View.DASHBOARD);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
+  const [announcements, setAnnouncements] = useState<Announcement[]>(INITIAL_ANNOUNCEMENTS);
   const [stores, setStores] = useState<Store[]>(INITIAL_STORES);
-  const [influencers, setInfluencers] = useState<Influencer[]>(INITIAL_INFLUENCERS);
+  const [influencers] = useState<Influencer[]>(INITIAL_INFLUENCERS);
   const [users, setUsers] = useState<UserAccount[]>(INITIAL_USERS);
   
-  const [isAiLoading, setIsAiLoading] = useState(false);
-  const [adminPassword] = useState('1234'); 
-  const [settingsTab, setSettingsTab] = useState<'stores' | 'users' | 'system'>('stores');
+  // Customization & Policy State
+  const [loginWallpaper, setLoginWallpaper] = useState<string>('');
+  const [allowRegistration, setAllowRegistration] = useState<boolean>(false);
+  const [requireApproval, setRequireApproval] = useState<boolean>(true);
+
+  // Sub-navigation State
+  const [subView, setSubView] = useState<SubView>('history');
+  const [warehouseSubView, setWarehouseSubView] = useState<WarehouseSubView>('pending');
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
   
-  const [showAddProductModal, setShowAddProductModal] = useState(false);
-  const [showAddStoreModal, setShowAddStoreModal] = useState(false);
-  const [showAddUserModal, setShowAddUserModal] = useState(false);
-  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  // Shipment Tracker Specific State
+  const [selectedTrackingOrderId, setSelectedTrackingOrderId] = useState<string | null>(null);
+  const [tempTrackingNumber, setTempTrackingNumber] = useState('');
 
-  // Shipment Tracker filters
-  const [shipmentSearch, setShipmentSearch] = useState('');
-  const [shipmentStoreFilter, setShipmentStoreFilter] = useState('all');
-  const [shipmentBranchFilter, setShipmentBranchFilter] = useState('all');
-  const [shipmentStartDate, setShipmentStartDate] = useState('');
-  const [shipmentEndDate, setShipmentEndDate] = useState('');
+  // Warehouse Specific State
+  const [confirmingOrder, setConfirmingOrder] = useState<Order | null>(null);
+  const [warehouseAuth, setWarehouseAuth] = useState({ userId: '', password: '' });
 
-  // User Form State
-  const [newUser, setNewUser] = useState<Partial<UserAccount>>({
-    name: '',
-    email: '',
-    password: '',
-    role: USER_ROLES.PURCHASING,
-    allowedViews: [...PURCHASING_VIEWS]
+  // Product Form State
+  const [isEditingProduct, setIsEditingProduct] = useState<string | null>(null);
+  const [productForm, setProductForm] = useState<Partial<Product>>({
+    name: '', sku: '', unit: 'ชิ้น', category: PRODUCT_CATEGORIES[0], unitPrice: 0,
+    stockPurchasing: 0, stockContent: 0, stockInfluencer: 0, stockLive: 0, stockAffiliate: 0, stockBuffer: 0,
+    lotNumber: '', mfd: '', exp: '',
+    images: []
   });
 
-  const [editingUser, setEditingUser] = useState<UserAccount | null>(null);
-
-  // New Product Form State
-  const [newProduct, setNewProduct] = useState<Partial<Product>>({
-    images: [],
-    unit: 'ชิ้น',
-    category: '',
-    dimensions: { l: 0, w: 0, h: 0 },
-    unitPrice: 0,
-    leadTime: '1 week',
-    stockPurchasing: 0,
-    stockInfluencer: 0,
-    stockLive: 0,
-    stockAffiliate: 0,
-    stockBuffer: 0,
-    stockContent: 0
+  // Order Form State
+  const [productSearch, setProductSearch] = useState('');
+  const [operationCategoryFilter, setOperationCategoryFilter] = useState('all');
+  const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
+  const [createOrderForm, setCreateOrderForm] = useState({
+    poNumber: '',
+    date: new Date().toISOString().split('T')[0],
+    time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+    storeId: '',
+    subBranch: '',
+    recipientName: '',
+    recipientAddress: ''
   });
 
-  const [isWarehouseOnlyFilter, setIsWarehouseOnlyFilter] = useState(false);
-  const [isCatalogMode, setIsCatalogMode] = useState(false);
-  const [inventoryCategoryFilter, setInventoryCategoryFilter] = useState<string>('All');
-  const [adjustments, setAdjustments] = useState<Record<string, Record<string, number>>>({}); 
-  const [showConfirmModal, setShowConfirmModal] = useState<{ productId?: string, channel?: InventoryType, amount?: number, status?: OrderStatus, orderId?: string, type?: 'order' | 'stock' | 'delete_product' | 'delete_user' } | null>(null);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [passwordError, setPasswordError] = useState(false);
-  const [selectedAdjReporter, setSelectedAdjReporter] = useState('');
-
-  const [whStatusFilter, setWhStatusFilter] = useState<OrderStatus | 'all'>('pending');
-  const [whSourceFilter, setWhSourceFilter] = useState<OrderSource | 'all'>('all');
-  const [whSearch, setWhSearch] = useState('');
-  const [whStartDate, setWhStartDate] = useState('');
-  const [whEndDate, setWhEndDate] = useState('');
-  const [whStoreFilter, setWhStoreFilter] = useState('all');
-
-  const [showReporterModal, setShowReporterModal] = useState(false);
-  const [selectedReporter, setSelectedReporter] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
 
-  const [selectedStore, setSelectedStore] = useState(stores[0]?.name || '');
-  const [selectedSubBranch, setSelectedSubBranch] = useState('');
-  const [selectedInfluencerName, setSelectedInfluencerName] = useState(influencers[0]?.name || '');
-  const [influencerFirstName, setInfluencerFirstName] = useState('');
+  // Settings UI State
+  const [newStoreName, setNewStoreName] = useState('');
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [draftOrder, setDraftOrder] = useState<Record<string, DraftItem>>({});
-  const [processingChannel, setProcessingChannel] = useState<OrderSource>('purchasing');
-
-  // Load from local storage on mount
+  // Persistence
   useEffect(() => {
-    const savedUsers = localStorage.getItem('laglace_users');
-    const savedProducts = localStorage.getItem('laglace_products');
-    const savedOrders = localStorage.getItem('laglace_orders');
-    const savedBg = localStorage.getItem('laglace_login_bg');
-    
-    if (savedUsers) setUsers(JSON.parse(savedUsers));
-    if (savedProducts) setProducts(JSON.parse(savedProducts));
-    if (savedOrders) setOrders(JSON.parse(savedOrders));
-    if (savedBg) setLoginBg(savedBg);
+    const saved = localStorage.getItem('laglace_v16_master');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.orders) setOrders(parsed.orders);
+      if (parsed.products) setProducts(parsed.products);
+      if (parsed.announcements) setAnnouncements(parsed.announcements);
+      if (parsed.stores) setStores(parsed.stores);
+      if (parsed.users) setUsers(parsed.users);
+      if (parsed.loginWallpaper) setLoginWallpaper(parsed.loginWallpaper);
+      if (parsed.allowRegistration !== undefined) setAllowRegistration(parsed.allowRegistration);
+      if (parsed.requireApproval !== undefined) setRequireApproval(parsed.requireApproval);
+    }
   }, []);
 
-  // Save to local storage when changed
   useEffect(() => {
-    localStorage.setItem('laglace_users', JSON.stringify(users));
-  }, [users]);
+    localStorage.setItem('laglace_v16_master', JSON.stringify({ 
+      orders, 
+      products, 
+      announcements,
+      stores, 
+      users,
+      loginWallpaper,
+      allowRegistration,
+      requireApproval
+    }));
+  }, [orders, products, announcements, stores, users, loginWallpaper, allowRegistration, requireApproval]);
 
+  // Reset SubView when main view changes
   useEffect(() => {
-    localStorage.setItem('laglace_products', JSON.stringify(products));
-  }, [products]);
-
-  useEffect(() => {
-    localStorage.setItem('laglace_orders', JSON.stringify(orders));
-  }, [orders]);
-
-  const handleBgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        setLoginBg(base64String);
-        localStorage.setItem('laglace_login_bg', base64String);
-        setNotification("📸 อัปเดตภาพพื้นหลังหน้า Login สำเร็จ");
-      };
-      reader.readAsDataURL(file);
+    if (activeView === View.INVENTORY) {
+      setSubView('manage_inventory');
+    } else if ([View.PURCHASING, View.INFLUENCER_DEP, View.LIVE_DEP, View.AFFILIATE_DEP, View.BUFFER_DEP].includes(activeView)) {
+      setSubView('history');
     }
-  };
+    setProductSearch('');
+    setOperationCategoryFilter('all');
+    setSelectedItems({});
+    setSelectedTrackingOrderId(null);
+    setTempTrackingNumber('');
+    setConfirmingOrder(null);
+    setWarehouseAuth({ userId: '', password: '' });
+    setSelectedOrderId(null);
+    setHistorySearchQuery('');
+    setCreateOrderForm({
+      poNumber: '',
+      date: new Date().toISOString().split('T')[0],
+      time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      storeId: '',
+      subBranch: '',
+      recipientName: '',
+      recipientAddress: ''
+    });
+    if (activeView === View.WAREHOUSE) {
+      setWarehouseSubView('pending');
+    }
+  }, [activeView]);
 
-  const handleResetBg = () => {
-    setLoginBg(null);
-    localStorage.removeItem('laglace_login_bg');
-    setNotification("📸 รีเซ็ตภาพพื้นหลังเป็นค่าเริ่มต้นสำเร็จ");
+  const showNotify = (msg: string) => {
+    setNotification(msg);
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setLoginError('');
     const user = users.find(u => u.email === loginEmail && u.password === loginPassword);
     if (user) {
       setCurrentUser(user);
       setIsLoggedIn(true);
-      setSelectedAdjReporter(user.name);
-      setSelectedReporter(user.name);
-      setActiveView(user.allowedViews.includes(View.DASHBOARD) ? View.DASHBOARD : user.allowedViews[0]);
+      setActiveView(user.allowedViews[0]);
     } else {
-      setLoginError('Invalid email or password. Please try again.');
+      setLoginError('อีเมลหรือรหัสผ่านไม่ถูกต้อง');
     }
   };
 
-  const handleLogout = () => {
-    setIsLoggedIn(false);
-    setCurrentUser(null);
-    setLoginEmail('');
-    setLoginPassword('');
-    setShowPassword(false);
-  };
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
 
-  const categories = useMemo(() => {
-    const cats = products.map(p => p.category).filter(c => c && c.trim() !== '');
-    return ['All', ...Array.from(new Set(cats))];
-  }, [products]);
-
-  const filteredInventoryProducts = useMemo(() => {
-    let result = products;
-    if (inventoryCategoryFilter !== 'All') {
-      result = result.filter(p => p.category === inventoryCategoryFilter);
-    }
-    if (isWarehouseOnlyFilter) {
-      result = result.filter(p => p.stockBuffer > 0);
-    }
-    return result;
-  }, [products, inventoryCategoryFilter, isWarehouseOnlyFilter]);
-
-  const filteredPurchasingProducts = useMemo(() => {
-    if (selectedCategory === 'All') return products;
-    return products.filter(p => p.category === selectedCategory);
-  }, [products, selectedCategory]);
-
-  const filteredWarehouseOrders = useMemo(() => {
-    return orders.filter(o => {
-      const matchStatus = whStatusFilter === 'all' || o.status === whStatusFilter;
-      const matchSource = whSourceFilter === 'all' || o.source === whSourceFilter;
-      const matchSearch = whSearch === '' || 
-        o.productName.toLowerCase().includes(whSearch.toLowerCase()) ||
-        o.productId.toLowerCase().includes(whSearch.toLowerCase()) ||
-        (o.storeName?.toLowerCase().includes(whSearch.toLowerCase()) ?? false) ||
-        (o.influencerName?.toLowerCase().includes(whSearch.toLowerCase()) ?? false);
-      const orderDate = new Date(o.requestedAt).toISOString().split('T')[0];
-      const matchStart = !whStartDate || orderDate >= whStartDate;
-      const matchEnd = !whEndDate || orderDate <= whEndDate;
-      const matchStore = whStoreFilter === 'all' || o.storeName === whStoreFilter;
-      return matchStatus && matchSource && matchSearch && matchStart && matchEnd && matchStore;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        setProductForm(prev => ({
+          ...prev,
+          images: [...(prev.images || []), base64]
+        }));
+      };
+      reader.readAsDataURL(file);
     });
-  }, [orders, whStatusFilter, whSourceFilter, whSearch, whStartDate, whEndDate, whStoreFilter]);
+  };
 
-  const groupedWarehouseOrders = useMemo(() => {
-    const groups: Record<string, {
-      title: string;
-      subTitle: string;
-      date: string;
-      time: string;
-      source: OrderSource;
-      orders: Order[];
-    }> = {};
+  const saveProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newProduct = {
+      ...productForm,
+      id: isEditingProduct || `P-${Date.now()}`,
+      images: productForm.images && productForm.images.length > 0 ? productForm.images : ['https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?auto=format&fit=crop&q=80&w=300']
+    } as Product;
 
-    filteredWarehouseOrders.forEach(o => {
-      const dateObj = new Date(o.requestedAt);
-      const dateStr = dateObj.toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' });
-      const timeStr = dateObj.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-      const mainKey = o.storeName || o.influencerName || 'Unspecified';
-      const subKey = o.subBranch || '-';
-      const groupKey = `${mainKey}|${subKey}|${o.requestedAt}`;
-
-      if (!groups[groupKey]) {
-        groups[groupKey] = {
-          title: mainKey,
-          subTitle: subKey,
-          date: dateStr,
-          time: timeStr,
-          source: o.source,
-          orders: []
-        };
-      }
-      groups[groupKey].orders.push(o);
-    });
-
-    return Object.values(groups).sort((a, b) => new Date(b.orders[0].requestedAt).getTime() - new Date(a.orders[0].requestedAt).getTime());
-  }, [filteredWarehouseOrders]);
-
-  /* Filter and group confirmed orders for Shipment Tracker view */
-  const confirmedMtGroups = useMemo(() => {
-    const filtered = orders.filter(o => {
-      const isConfirmed = o.status === 'confirmed';
-      const matchSearch = shipmentSearch === '' || 
-        o.productName.toLowerCase().includes(shipmentSearch.toLowerCase()) ||
-        o.id.toLowerCase().includes(shipmentSearch.toLowerCase());
-      const matchStore = shipmentStoreFilter === 'all' || o.storeName === shipmentStoreFilter || o.influencerName === shipmentStoreFilter;
-      const matchBranch = shipmentBranchFilter === 'all' || o.subBranch === shipmentBranchFilter;
-      const orderDate = new Date(o.requestedAt).toISOString().split('T')[0];
-      const matchStart = !shipmentStartDate || orderDate >= shipmentStartDate;
-      const matchEnd = !shipmentEndDate || orderDate <= shipmentEndDate;
-      
-      return isConfirmed && matchSearch && matchStore && matchBranch && matchStart && matchEnd;
-    });
-
-    const groups: Record<string, {
-      title: string;
-      subTitle: string;
-      date: string;
-      time: string;
-      source: OrderSource;
-      trackingNumber?: string;
-      orders: Order[];
-    }> = {};
-
-    filtered.forEach(o => {
-      const dateObj = new Date(o.requestedAt);
-      const dateStr = dateObj.toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' });
-      const timeStr = dateObj.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-      const mainKey = o.storeName || o.influencerName || 'Unspecified';
-      const subKey = o.subBranch || '-';
-      const groupKey = `${mainKey}|${subKey}|${o.requestedAt}`;
-
-      if (!groups[groupKey]) {
-        groups[groupKey] = {
-          title: mainKey,
-          subTitle: subKey,
-          date: dateStr,
-          time: timeStr,
-          source: o.source,
-          trackingNumber: o.trackingNumber,
-          orders: []
-        };
-      }
-      groups[groupKey].orders.push(o);
-    });
-
-    return Object.values(groups).sort((a, b) => new Date(b.orders[0].requestedAt).getTime() - new Date(a.orders[0].requestedAt).getTime());
-  }, [orders, shipmentSearch, shipmentStoreFilter, shipmentBranchFilter, shipmentStartDate, shipmentEndDate]);
-
-  const stockSummary = useMemo(() => {
-    return products.reduce((acc, p) => ({
-      purchasing: acc.purchasing + (p.stockPurchasing || 0),
-      influencer: acc.influencer + (p.stockInfluencer || 0),
-      live: acc.live + (p.stockLive || 0),
-      affiliate: acc.affiliate + (p.stockAffiliate || 0),
-      buffer: acc.buffer + (p.stockBuffer || 0),
-      total: acc.total + (p.stockPurchasing || 0) + (p.stockInfluencer || 0) + (p.stockLive || 0) + (p.stockAffiliate || 0) + (p.stockBuffer || 0)
-    }), { purchasing: 0, influencer: 0, live: 0, affiliate: 0, buffer: 0, total: 0 });
-  }, [products]);
-
-  const deptHistory = useMemo(() => {
-    let source: OrderSource;
-    switch(activeView) {
-      case View.INFLUENCER_DEP: source = 'influencer'; break;
-      case View.LIVE_DEP: source = 'live'; break;
-      case View.AFFILIATE_DEP: source = 'affiliate'; break;
-      case View.BUFFER_DEP: source = 'buffer'; break;
-      default: source = 'purchasing';
+    if (isEditingProduct) {
+      setProducts(prev => prev.map(p => p.id === isEditingProduct ? newProduct : p));
+      showNotify("แก้ไขข้อมูลสินค้าสำเร็จ");
+    } else {
+      setProducts(prev => [...prev, newProduct]);
+      showNotify("เพิ่มสินค้าใหม่สำเร็จ");
     }
-    return orders.filter(o => o.source === source).sort((a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime());
-  }, [orders, activeView]);
-
-  useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [notification]);
-
-  const currentStoreData = useMemo(() => {
-    return stores.find(s => s.name === selectedStore);
-  }, [stores, selectedStore]);
-
-  const handleUpdateOrderStatus = (orderId: string, status: OrderStatus) => {
-    setShowConfirmModal({ orderId, status, type: 'order' });
-    setPasswordInput('');
-    setPasswordError(false);
+    setSubView('manage_inventory');
+    setIsEditingProduct(null);
   };
 
-  const handleUpdateTrackingNumberForGroup = (orderIds: string[], value: string) => {
-    setOrders(prev => prev.map(o => orderIds.includes(o.id) ? { ...o, trackingNumber: value } : o));
+  const duplicateProduct = (p: Product) => {
+    setProductForm({ ...p, id: undefined, name: `${p.name} (Copy)`, sku: `${p.sku}-COPY` });
+    setSubView('add_product');
+    setIsEditingProduct(null);
+    showNotify("สร้างจากต้นแบบเรียบร้อย กรุณาระบุ SKU ใหม่");
   };
 
-  const handleUpdateWarehouseNote = (orderId: string, value: string) => {
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, warehouseNote: value } : o));
-  };
-
-  const handleWhQuantityChange = (orderId: string, delta: number) => {
+  const updateOrderStatus = (orderId: string, status: OrderStatus, confirmedBy?: string) => {
     setOrders(prev => prev.map(o => {
       if (o.id === orderId) {
-        return { ...o, quantity: Math.max(0, o.quantity + delta) };
+        if (status === 'confirmed' && o.status !== 'confirmed') {
+          const source = o.source;
+          const stockKey = `stock${source.charAt(0).toUpperCase() + source.slice(1)}` as keyof Product;
+          
+          setProducts(prevProds => prevProds.map(p => {
+            const item = o.items.find(i => i.productId === p.id);
+            if (item) {
+              return { ...p, [stockKey]: Math.max(0, (p[stockKey] as number) - item.quantity) };
+            }
+            return p;
+          }));
+        }
+        return { ...o, status, processedAt: new Date().toISOString(), purchasingDept: confirmedBy || o.purchasingDept };
+      }
+      return o;
+    }));
+    showNotify(`อัปเดตบิล #${orderId} เป็น ${status.toUpperCase()}`);
+  };
+
+  const adjustWarehouseOrderQty = (orderId: string, productId: string, newQty: number) => {
+    if (newQty < 0) return;
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        const newItems = o.items.map(item => 
+          item.productId === productId ? { ...item, quantity: newQty } : item
+        );
+        const newTotal = newItems.reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
+        return { ...o, items: newItems, totalValue: newTotal };
       }
       return o;
     }));
   };
 
-  const handleBulkConfirm = () => {
-    const pending = orders.filter(o => o.status === 'pending');
-    if (pending.length === 0) return;
-    setShowConfirmModal({ status: 'confirmed', type: 'order' }); 
-    setPasswordInput('');
-    setPasswordError(false);
-  };
-
-  const fetchAiAnalysis = async () => {
-    setIsAiLoading(true);
-    try {
-      const result = await analyzeStockConflict(orders, products);
-      alert(result);
-    } catch (error) {
-      console.error("Error fetching AI analysis:", error);
-      setNotification("❌ ไม่สามารถวิเคราะห์สต็อกได้ในขณะนี้");
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
-  const handleVerifyPassword = () => {
-    if (passwordInput === adminPassword) {
-      if (showConfirmModal?.type === 'order') {
-        if (showConfirmModal.orderId) {
-          const { orderId, status } = showConfirmModal;
-          setOrders(prev => prev.map(order => {
-            if (order.id === orderId) {
-              if (status === 'confirmed') {
-                setProducts(currProducts => currProducts.map(p => {
-                  if (p.id === order.productId) {
-                    const fieldMap: Record<OrderSource, keyof Product> = {
-                      influencer: 'stockInfluencer',
-                      purchasing: 'stockPurchasing',
-                      live: 'stockLive',
-                      affiliate: 'stockAffiliate',
-                      buffer: 'stockBuffer'
-                    };
-                    const field = fieldMap[order.source];
-                    return { ...p, [field]: Math.max(0, (p[field] as number) - order.quantity) };
-                  }
-                  return p;
-                }));
-              }
-              return { ...order, status: status!, processedAt: new Date().toISOString() };
-            }
-            return order;
-          }));
-        } else if (showConfirmModal.status === 'confirmed') {
-          let tempProducts = [...products];
-          const updatedOrders = orders.map(order => {
-            if (order.status === 'pending') {
-              const productIndex = tempProducts.findIndex(p => p.id === order.productId);
-              if (productIndex !== -1) {
-                const product = tempProducts[productIndex];
-                const fieldMap: Record<OrderSource, keyof Product> = {
-                  influencer: 'stockInfluencer',
-                  purchasing: 'stockPurchasing',
-                  live: 'stockLive',
-                  affiliate: 'stockAffiliate',
-                  buffer: 'stockBuffer'
-                    };
-                const field = fieldMap[order.source];
-                const availableStock = product[field] as number;
-                if (availableStock >= order.quantity) {
-                  const updatedProduct = { ...product };
-                  (updatedProduct[field] as number) -= order.quantity;
-                  tempProducts[productIndex] = updatedProduct;
-                  return { ...order, status: 'confirmed' as OrderStatus, processedAt: new Date().toISOString() };
-                }
-              }
-            }
-            return order;
-          });
-          setOrders(updatedOrders);
-          setProducts(tempProducts);
-          setNotification(`✅ ยืนยันสต็อกสำเร็จ`);
-        }
-      } else if (showConfirmModal?.type === 'stock' && showConfirmModal.productId && showConfirmModal.channel) {
-        const { productId, channel, amount } = showConfirmModal;
-        setProducts(prev => prev.map(p => {
-          if (p.id === productId) {
-            const fieldMap: Record<InventoryType, keyof Product> = {
-              [InventoryType.PURCHASING]: 'stockPurchasing',
-              [InventoryType.CONTENT]: 'stockContent',
-              [InventoryType.INFLUENCERS]: 'stockInfluencer',
-              [InventoryType.LIVE]: 'stockLive',
-              [InventoryType.AFFILIATE]: 'stockAffiliate',
-              [InventoryType.BUFFER]: 'stockBuffer',
-              [InventoryType.OVERALL]: 'stockBuffer'
-            };
-            const field = fieldMap[channel!];
-            return { ...p, [field]: Math.max(0, (p[field] as number) + amount!) };
-          }
-          return p;
-        }));
-        
-        setAdjustments(prev => { 
-          const next = { ...prev };
-          if (next[productId!]) delete next[productId!][channel!];
-          return next;
-        });
-        setNotification(`✅ ปรับปรุงสต็อก ${channel === InventoryType.BUFFER ? 'Buffer Stock Warehouse' : channel} โดยคุณ ${selectedAdjReporter} สำเร็จ (+/- ${amount})`);
-      } else if (showConfirmModal?.type === 'delete_product' && showConfirmModal.productId) {
-        setProducts(prev => prev.filter(p => p.id !== showConfirmModal.productId));
-        setNotification(`🗑️ ลบสินค้าออกจากระบบสำเร็จ`);
-      } else if (showConfirmModal?.type === 'delete_user' && showConfirmModal.orderId) {
-        setUsers(prev => prev.filter(u => u.id !== showConfirmModal.orderId));
-        setNotification(`🗑️ ลบผู้ใช้งานสำเร็จ`);
-      }
-      setShowConfirmModal(null); setPasswordInput(''); setPasswordError(false);
-    } else setPasswordError(true);
-  };
-
-  const updateAdjustmentValue = (productId: string, channel: string, value: string) => {
-    const num = parseInt(value) || 0;
-    setAdjustments(prev => ({
-      ...prev,
-      [productId]: {
-        ...(prev[productId] || {}),
-        [channel]: num
-      }
-    }));
-  };
-
-  const initiateAdjustment = (productId: string, channel: InventoryType) => {
-    const amount = adjustments[productId]?.[channel] || 0;
-    if (amount === 0) {
-      alert("กรุณาระบุจำนวนที่ต้องการปรับปรุง (เช่น +10 หรือ -5)");
+  const saveTrackingNumber = (orderId: string) => {
+    if (!tempTrackingNumber.trim()) {
+      showNotify("กรุณาระบุเลขพัสดุ");
       return;
     }
-    setShowConfirmModal({ productId, channel, amount, type: 'stock' }); 
-    setPasswordInput(''); 
-    setPasswordError(false);
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, trackingNumber: tempTrackingNumber } : o));
+    setSelectedTrackingOrderId(null);
+    setTempTrackingNumber('');
+    showNotify("บันทึกเลขพัสดุเรียบร้อยแล้ว");
   };
 
-  const initiateDeleteProduct = (productId: string) => {
-    setShowConfirmModal({ productId, type: 'delete_product' });
-    setPasswordInput('');
-    setPasswordError(false);
-  };
-
-  const initiateDeleteUser = (userId: string) => {
-    setShowConfirmModal({ orderId: userId, type: 'delete_user' });
-    setPasswordInput('');
-    setPasswordError(false);
-  };
-
-  const incrementDraft = (productId: string, amount: number) => {
-    setDraftOrder(prev => {
-      const current = prev[productId]?.quantity || 0;
-      const newQty = Math.max(0, current + amount);
-      if (newQty === 0) {
-        const next = { ...prev };
-        delete next[productId];
-        return next;
-      }
-      return { ...prev, [productId]: { quantity: newQty } };
-    });
-  };
-
-  const handleAddProduct = () => {
-    if (!newProduct.name || !newProduct.sku) {
-      alert("กรุณาระบุชื่อสินค้าและ SKU");
-      return;
+  const handleResetSettings = () => {
+    if (confirm("คุณต้องการล้างการตั้งค่าทั้งหมดและกลับไปใช้ค่าเริ่มต้นใช่หรือไม่?")) {
+      setProducts(INITIAL_PRODUCTS);
+      setOrders(INITIAL_ORDERS);
+      setAnnouncements(INITIAL_ANNOUNCEMENTS);
+      setStores(INITIAL_STORES);
+      setUsers(INITIAL_USERS);
+      setLoginWallpaper('');
+      setAllowRegistration(false);
+      setRequireApproval(true);
+      showNotify("รีเซ็ตระบบเป็นค่าเริ่มต้นเรียบร้อย");
+      localStorage.removeItem('laglace_v16_master');
+      window.location.reload();
     }
+  };
 
-    const p: Product = {
-      id: `P${Math.floor(Math.random() * 900) + 100}`,
-      sku: newProduct.sku,
-      name: newProduct.name,
-      unit: newProduct.unit || 'ชิ้น',
-      category: newProduct.category || 'ทั่วไป',
-      description: newProduct.description,
-      barcode13: newProduct.barcode13,
-      barcodeMT: newProduct.barcodeMT,
-      images: newProduct.images?.length ? newProduct.images : ['https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=300'],
-      weight: newProduct.weight,
-      dimensions: newProduct.dimensions as any,
-      productionDate: newProduct.productionDate,
-      expirationDate: newProduct.expirationDate,
-      unitPrice: newProduct.unitPrice || 0,
-      leadTime: newProduct.leadTime || '1 week',
-      stockPurchasing: newProduct.stockPurchasing || 0,
-      stockContent: newProduct.stockContent || 0,
-      stockInfluencer: newProduct.stockInfluencer || 0,
-      stockLive: newProduct.stockLive || 0,
-      stockAffiliate: newProduct.stockAffiliate || 0,
-      stockBuffer: newProduct.stockBuffer || 0
+  const handleAddStore = () => {
+    if (!newStoreName.trim()) return;
+    const newStore: Store = {
+      id: `S-${Date.now()}`,
+      name: newStoreName,
+      subBranches: []
     };
+    setStores([...stores, newStore]);
+    setNewStoreName('');
+    showNotify("เพิ่มหน้าร้านใหม่สำเร็จ");
+  };
 
-    setProducts(prev => [...prev, p]);
-    setShowAddProductModal(false);
-    setNewProduct({
-      images: [],
-      unit: 'ชิ้น',
-      category: '',
-      dimensions: { l: 0, w: 0, h: 0 },
-      unitPrice: 0,
-      leadTime: '1 week',
-      stockPurchasing: 0,
-      stockInfluencer: 0,
-      stockLive: 0,
-      stockAffiliate: 0,
-      stockBuffer: 0,
-      stockContent: 0
-    });
-    setNotification("✨ เพิ่มสินค้าใหม่เข้าระบบสำเร็จ");
+  const handleAddBranch = (storeId: string, branchName: string) => {
+    if (!branchName.trim()) return;
+    setStores(prev => prev.map(s => s.id === storeId ? { ...s, subBranches: [...(s.subBranches || []), branchName] } : s));
+    showNotify("เพิ่มสาขาย่อยสำเร็จ");
   };
 
   const handleAddUser = () => {
-    if (!newUser.name || !newUser.email || !newUser.password) {
-      alert("Please fill in all required fields.");
-      return;
-    }
-    
-    const isWarehouseRole = newUser.role === USER_ROLES.WAREHOUSE || newUser.role === USER_ROLES.ADMIN;
-
-    const u: UserAccount = {
-      id: `U${Date.now()}`,
-      name: newUser.name,
-      email: newUser.email,
-      password: newUser.password,
-      role: newUser.role || USER_ROLES.PURCHASING,
-      canManageAccounts: newUser.role === USER_ROLES.ADMIN,
-      canCreateProducts: isWarehouseRole,
-      canAdjustStock: isWarehouseRole,
-      allowedViews: newUser.allowedViews || (isWarehouseRole ? ALL_VIEWS : PURCHASING_VIEWS)
+    if (!newUserName || !newUserEmail || !newUserPassword) return;
+    const newUser: UserAccount = {
+      id: `U-${Date.now()}`,
+      name: newUserName,
+      email: newUserEmail,
+      password: newUserPassword,
+      role: 'Staff',
+      canManageAccounts: false,
+      canCreateProducts: false,
+      canAdjustStock: false,
+      allowedViews: PURCHASING_VIEWS
     };
-
-    setUsers(prev => [...prev, u]);
-    setShowAddUserModal(false);
-    setNewUser({
-      name: '',
-      email: '',
-      password: '',
-      role: USER_ROLES.PURCHASING,
-      allowedViews: [...PURCHASING_VIEWS]
-    });
-    setNotification("👤 สร้างบัญชีผู้ใช้งานใหม่สำเร็จ");
+    setUsers([...users, newUser]);
+    setNewUserName('');
+    setNewUserEmail('');
+    setNewUserPassword('');
+    showNotify("สร้างบัญชีผู้ใช้ใหม่สำเร็จ");
   };
 
-  const handleSaveEditUser = () => {
-    if (!editingUser) return;
-    if (!editingUser.name || !editingUser.email || !editingUser.password) {
-      alert("Please fill in all required fields.");
-      return;
-    }
-
-    setUsers(prev => prev.map(u => u.id === editingUser.id ? editingUser : u));
-    
-    if (currentUser && editingUser.id === currentUser.id) {
-      setCurrentUser(editingUser);
-    }
-
-    setShowEditUserModal(false);
-    setEditingUser(null);
-    setNotification("👤 อัปเดตข้อมูลผู้ใช้งานสำเร็จ");
+  const toggleUserPermission = (userId: string, permission: keyof UserAccount) => {
+    setUsers(prev => prev.map(u => u.id === userId ? { ...u, [permission]: !u[permission] } : u));
   };
 
-  const submitBatchOrders = () => {
-    const isInfluencerSource = activeView === View.INFLUENCER_DEP;
-    const isLiveSource = activeView === View.LIVE_DEP;
-    const isAffiliateSource = activeView === View.AFFILIATE_DEP;
-    const isBufferSource = activeView === View.BUFFER_DEP;
-
-    let finalSource: OrderSource = processingChannel;
-    if (isInfluencerSource) finalSource = 'influencer';
-    else if (isLiveSource) finalSource = 'live';
-    else if (isAffiliateSource) finalSource = 'affiliate';
-    else if (isBufferSource) finalSource = 'buffer';
-
-    const timestamp = new Date().toISOString();
-    const newOrdersList: Order[] = (Object.entries(draftOrder) as [string, DraftItem][]).map(([productId, item]): Order => {
-      const product = products.find(p => p.id === productId);
-      return {
-        id: `ORD-${Math.floor(Math.random() * 9000) + 1000}`,
-        source: finalSource,
-        storeName: isInfluencerSource ? undefined : selectedStore,
-        subBranch: isInfluencerSource ? undefined : selectedSubBranch,
-        influencerName: isInfluencerSource ? selectedInfluencerName : undefined,
-        productId: productId,
-        productName: product?.name || 'Unknown',
-        requestedQuantity: item.quantity,
-        quantity: item.quantity,
-        status: 'pending' as OrderStatus,
-        requestedAt: timestamp,
-        purchasingDept: selectedReporter
-      };
-    });
-    setOrders(prev => [...newOrdersList, ...prev]);
-    setDraftOrder({});
-    setShowReporterModal(false);
-    setNotification(`✅ ส่งใบจองสต็อกสำเร็จ ${newOrdersList.length} รายการ`);
-  };
-
-  const changeView = (view: View, topicId?: number) => {
-    setActiveView(view);
-    if (view === View.NEWS_ANNOUNCEMENT && topicId) {
-      setTimeout(() => {
-        const element = document.getElementById(`news-topic-${topicId}`);
-        if (element) {
-          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const toggleUserView = (userId: string, view: View) => {
+    setUsers(prev => prev.map(u => {
+      if (u.id === userId) {
+        const allowed = [...u.allowedViews];
+        if (allowed.includes(view)) {
+          return { ...u, allowedViews: allowed.filter(v => v !== view) };
+        } else {
+          return { ...u, allowedViews: [...allowed, view] };
         }
-      }, 100);
+      }
+      return u;
+    }));
+  };
+
+  const getSourceFromView = (view: View): OrderSource => {
+    switch(view) {
+      case View.INFLUENCER_DEP: return 'influencer';
+      case View.LIVE_DEP: return 'live';
+      case View.AFFILIATE_DEP: return 'affiliate';
+      case View.BUFFER_DEP: return 'buffer';
+      default: return 'purchasing';
     }
   };
 
-  // If not logged in, show the login screen
-  if (!isLoggedIn || !currentUser) {
-    return (
-      <div className="min-h-screen relative flex items-center justify-center p-6 overflow-hidden">
-         {/* Background Layer */}
-         <div 
-           className="absolute inset-0 bg-slate-900 z-0 transition-all duration-700" 
-           style={loginBg ? {
-             backgroundImage: `url(${loginBg})`,
-             backgroundSize: 'cover',
-             backgroundPosition: 'center'
-           } : {}}
-         />
-         
-         {/* Overlay Layer for Readability */}
-         <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px] z-10" />
+  const filteredOrdersBySearch = (ordersToFilter: Order[]) => {
+    if (!historySearchQuery.trim()) return ordersToFilter;
+    const q = historySearchQuery.toLowerCase();
+    return ordersToFilter.filter(o => 
+      o.poNumber.toLowerCase().includes(q) ||
+      o.id.toLowerCase().includes(q) ||
+      o.targetName?.toLowerCase().includes(q) ||
+      o.storeName?.toLowerCase().includes(q) ||
+      o.influencerName?.toLowerCase().includes(q) ||
+      o.subBranch?.toLowerCase().includes(q) ||
+      o.recipientName?.toLowerCase().includes(q) ||
+      o.purchasingDept.toLowerCase().includes(q) ||
+      o.items.some(item => 
+        item.productName.toLowerCase().includes(q) || 
+        item.sku.toLowerCase().includes(q)
+      )
+    );
+  };
 
-         <div className="bg-white rounded-[2.5rem] w-full max-w-md p-10 shadow-2xl animate-in zoom-in duration-500 relative z-20">
-            <div className="text-center mb-10">
-               <h1 className="text-3xl font-black text-pink-500 flex items-center justify-center gap-3 mb-2">
-                 <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/>
-                    <path d="m3.3 7 8.7 5 8.7-5"/>
-                    <path d="M12 22V12"/>
-                 </svg>
-                 LAGLACE
-               </h1>
-               <p className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Stock Management Portal</p>
+  const renderOperationModule = () => {
+    const source = getSourceFromView(activeView);
+    const viewTitle = activeView.replace('_DEP', '').replace('_', ' ');
+    const selectedStore = stores.find(s => s.id === createOrderForm.storeId);
+
+    if (subView === 'create') {
+      const filteredGridProducts = products.filter(p => {
+        const matchSearch = p.name.includes(productSearch) || p.sku.includes(productSearch);
+        const matchCategory = operationCategoryFilter === 'all' || p.category === operationCategoryFilter;
+        return matchSearch && matchCategory;
+      });
+
+      return (
+        <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
+          <div className="flex justify-between items-center">
+            <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">บันทึกรายการ {viewTitle}</h2>
+            <button onClick={() => setSubView('history')} className="px-6 py-2 bg-slate-100 text-slate-500 rounded-xl font-bold hover:bg-slate-200 transition-all">ย้อนกลับ</button>
+          </div>
+          <div className="bg-white p-8 rounded-[3rem] border shadow-sm space-y-10">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">เลขที่อ้างอิง (PO Number)</label>
+                <input type="text" placeholder="ระบุเลขที่บิล..." className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none focus:ring-2 focus:ring-blue-500" value={createOrderForm.poNumber} onChange={e => setCreateOrderForm({...createOrderForm, poNumber: e.target.value})} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">วันที่</label>
+                <input type="date" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={createOrderForm.date} onChange={e => setCreateOrderForm({...createOrderForm, date: e.target.value})} />
+              </div>
+              
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หน้าร้านหลัก / แบรนด์</label>
+                <select className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none appearance-none" value={createOrderForm.storeId} onChange={e => setCreateOrderForm({...createOrderForm, storeId: e.target.value, subBranch: ''})}>
+                  <option value="">เลือกหน้าร้าน...</option>
+                  {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">สาขาย่อย</label>
+                <select className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none appearance-none disabled:opacity-50" disabled={!selectedStore} value={createOrderForm.subBranch} onChange={e => setCreateOrderForm({...createOrderForm, subBranch: e.target.value})}>
+                  <option value="">เลือกสาขา...</option>
+                  {selectedStore?.subBranches?.map((b, idx) => <option key={idx} value={b}>{b}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-1 lg:col-span-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ชื่อ-นามสกุล ผู้รับ (Recipient Name)</label>
+                <input type="text" placeholder="ระบุชื่อผู้รับสินค้า..." className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={createOrderForm.recipientName} onChange={e => setCreateOrderForm({...createOrderForm, recipientName: e.target.value})} />
+              </div>
+
+              <div className="space-y-1 lg:col-span-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ที่อยู่สำหรับการจัดส่ง (Recipient Address)</label>
+                <input type="text" placeholder="ระบุที่อยู่โดยละเอียด..." className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={createOrderForm.recipientAddress} onChange={e => setCreateOrderForm({...createOrderForm, recipientAddress: e.target.value})} />
+              </div>
             </div>
-            
-            <form onSubmit={handleLogin} className="space-y-6">
-               <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Work Email</label>
-                  <input 
-                    type="email" 
-                    placeholder="name@laglace.com"
-                    className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold text-black focus:ring-4 focus:ring-blue-50 outline-none transition-all"
-                    value={loginEmail}
-                    onChange={e => setLoginEmail(e.target.value)}
-                    required
-                  />
-               </div>
-               <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Security Key</label>
-                  <div className="relative">
-                    <input 
-                      type={showPassword ? 'text' : 'password'} 
-                      placeholder="••••••••"
-                      className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold text-black focus:ring-4 focus:ring-blue-50 outline-none transition-all pr-12"
-                      value={loginPassword}
-                      onChange={e => setLoginPassword(e.target.value)}
-                      required
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors focus:outline-none"
-                    >
-                      {showPassword ? (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.774 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
-                        </svg>
-                      ) : (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-                        </svg>
-                      )}
-                    </button>
+
+            <div className="space-y-4">
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div className="flex-1 space-y-4">
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-tighter italic">รายการสินค้า (Select Products)</h3>
+                  <div className="flex flex-col md:flex-row gap-4">
+                    <input type="text" placeholder="ค้นหาสินค้าเพื่อเพิ่มลงบิล..." className="px-4 py-3 bg-slate-100 rounded-xl text-xs font-bold outline-none w-full md:w-64 border-2 border-transparent focus:border-blue-500" value={productSearch} onChange={e => setProductSearch(e.target.value)} />
+                    
+                    <div className="space-y-1">
+                      <select 
+                        className="p-3 bg-slate-100 rounded-xl text-xs font-bold outline-none border-2 border-transparent focus:border-blue-500 appearance-none min-w-[200px]"
+                        value={operationCategoryFilter}
+                        onChange={e => setOperationCategoryFilter(e.target.value)}
+                      >
+                        <option value="all">ทุกหมวดหมู่ (All Categories)</option>
+                        {PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 max-h-[250px] overflow-y-auto p-2 bg-slate-50 rounded-[2rem]">
+                {filteredGridProducts.map(p => (
+                  <div key={p.id} onClick={() => setSelectedItems(prev => ({...prev, [p.id]: (prev[p.id] || 0) + 1}))} className="bg-white p-3 rounded-2xl border hover:border-blue-500 cursor-pointer transition-all shadow-sm hover:scale-105 group">
+                    <img src={p.images[0] || 'https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?auto=format&fit=crop&q=80&w=300'} className="w-full aspect-square object-cover rounded-xl mb-2" alt="" />
+                    <p className="text-[9px] font-black text-slate-800 truncate">{p.name}</p>
+                    <p className="text-[8px] text-slate-400 font-bold">{p.sku}</p>
+                    <p className="text-[7px] bg-slate-100 px-1 py-0.5 rounded inline-block mt-1 text-slate-500">{p.category.split(' ')[0]}</p>
+                  </div>
+                ))}
+                {filteredGridProducts.length === 0 && (
+                   <div className="col-span-full py-10 text-center text-slate-300 font-bold italic">ไม่พบสินค้าในหมวดหมู่นี้</div>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-slate-900 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                  <tr><th className="p-4 rounded-tl-2xl">รายการ</th><th className="p-4 text-center">จำนวน</th><th className="p-4 text-right rounded-tr-2xl">ราคา</th></tr>
+                </thead>
+                <tbody className="divide-y text-sm font-bold">
+                  {Object.entries(selectedItems).map(([pid, qty]) => {
+                    const p = products.find(x => x.id === pid)!;
+                    return (
+                      <tr key={pid}>
+                        <td className="p-4">{p.name}</td>
+                        <td className="p-4 flex items-center justify-center gap-4">
+                          <button onClick={() => setSelectedItems(prev => { const n = {...prev}; if(n[pid]>1) n[pid]--; else delete n[pid]; return n; })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors">-</button>
+                          <span>{qty}</span>
+                          <button onClick={() => setSelectedItems(prev => ({...prev, [pid]: prev[pid]+1}))} className="w-8 h-8 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition-colors">+</button>
+                        </td>
+                        <td className="p-4 text-right">฿{(p.unitPrice * qty).toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                  {Object.keys(selectedItems).length === 0 && (
+                    <tr><td colSpan={3} className="p-10 text-center text-slate-300 italic">กรุณาเลือกสินค้าอย่างน้อย 1 รายการ</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end"><button 
+              disabled={Object.keys(selectedItems).length === 0}
+              onClick={() => {
+              const items: OrderItem[] = Object.entries(selectedItems).map(([pid, qty]) => {
+                const p = products.find(x => x.id === pid)!;
+                return { productId: pid, productName: p.name, sku: p.sku, quantity: qty, originalQuantity: qty, unitPrice: p.unitPrice };
+              });
+              const newOrder: Order = {
+                id: `TXN-${Date.now().toString().slice(-6)}`,
+                poNumber: createOrderForm.poNumber || `BILL-${Date.now().toString().slice(-5)}`,
+                source: source,
+                targetName: selectedStore?.name || 'Unknown',
+                storeName: selectedStore?.name,
+                subBranch: createOrderForm.subBranch,
+                recipientName: createOrderForm.recipientName,
+                recipientAddress: createOrderForm.recipientAddress,
+                items: items,
+                totalValue: items.reduce((s, i) => s + (i.quantity * i.unitPrice), 0),
+                status: 'pending',
+                requestedAt: `${createOrderForm.date}T${createOrderForm.time}:00`,
+                purchasingDept: currentUser?.name || 'Unknown'
+              };
+              setOrders([newOrder, ...orders]);
+              setSubView('history');
+              showNotify(`บันทึกรายการ Walkout สำเร็จ!`);
+            }} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all disabled:opacity-20">ยืนยันรายการ Walkout</button></div>
+          </div>
+        </div>
+      );
+    }
+
+    if (subView === 'details' && selectedOrderId) {
+      const order = orders.find(o => o.id === selectedOrderId);
+      if (!order) return null;
+      return (
+        <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
+           <div className="flex justify-between items-center">
+              <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">รายละเอียดรายการ {order.poNumber}</h2>
+              <button onClick={() => { setSubView('history'); setSelectedOrderId(null); }} className="px-6 py-2 bg-slate-100 text-slate-500 rounded-xl font-bold hover:bg-slate-200 transition-all">ย้อนกลับ</button>
+           </div>
+           
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="md:col-span-2 space-y-6">
+                 <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6">รายการสินค้าในบิล</h3>
+                    <div className="overflow-x-auto">
+                       <table className="w-full text-left font-bold text-sm">
+                          <thead className="text-[10px] text-slate-400 uppercase tracking-widest border-b">
+                             <tr>
+                                <th className="pb-4">สินค้า</th>
+                                <th className="pb-4 text-center">จำนวนเดิม</th>
+                                <th className="pb-4 text-center">จำนวนที่เบิก</th>
+                                <th className="pb-4 text-right">ราคารวม</th>
+                             </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                             {order.items.map((item, idx) => (
+                               <tr key={idx} className="hover:bg-slate-50/50">
+                                  <td className="py-4">
+                                     <p className="text-slate-900 font-black">{item.productName}</p>
+                                     <p className="text-[10px] text-slate-400">{item.sku}</p>
+                                  </td>
+                                  <td className="py-4 text-center text-slate-400">{item.originalQuantity}</td>
+                                  <td className="py-4 text-center">
+                                     <span className={`px-3 py-1 rounded-lg font-black ${item.quantity !== item.originalQuantity ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-600'}`}>
+                                        {item.quantity}
+                                     </span>
+                                  </td>
+                                  <td className="py-4 text-right text-slate-900 font-black">฿{(item.quantity * item.unitPrice).toLocaleString()}</td>
+                               </tr>
+                             ))}
+                          </tbody>
+                       </table>
+                    </div>
+                    <div className="mt-8 pt-8 border-t flex justify-between items-end">
+                       <div>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">สถานะบิล</p>
+                          <span className={`inline-block mt-1 px-4 py-1.5 rounded-full text-[9px] font-black uppercase border ${order.status === 'confirmed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>
+                             {order.status}
+                          </span>
+                       </div>
+                       <div className="text-right">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">ยอดรวมสุทธิ</p>
+                          <p className="text-3xl font-black text-slate-900 italic tracking-tighter">฿{order.totalValue.toLocaleString()}</p>
+                       </div>
+                    </div>
+                 </div>
+              </div>
+              
+              <div className="space-y-6">
+                 <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white space-y-6 shadow-xl">
+                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">ข้อมูลอ้างอิง</h3>
+                    <div className="space-y-4">
+                       <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase">หน้าร้าน/แบรนด์</p>
+                          <p className="text-sm font-black">{order.storeName || '-'}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase">สาขาย่อย</p>
+                          <p className="text-sm font-black">{order.subBranch || '-'}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase">ผู้รับ</p>
+                          <p className="text-sm font-black">{order.recipientName || '-'}</p>
+                          <p className="text-xs text-slate-400 mt-1">{order.recipientAddress || '-'}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase">ผู้บันทึกรายการ</p>
+                          <p className="text-sm font-black">{order.purchasingDept}</p>
+                       </div>
+                       <div>
+                          <p className="text-[9px] font-black text-slate-500 uppercase">วันที่บันทึก</p>
+                          <p className="text-sm font-black">{new Date(order.requestedAt).toLocaleString('th-TH')}</p>
+                       </div>
+                       {order.processedAt && (
+                         <div>
+                            <p className="text-[9px] font-black text-slate-500 uppercase">วันที่ยืนยันเบิก</p>
+                            <p className="text-sm font-black text-emerald-400">{new Date(order.processedAt).toLocaleString('th-TH')}</p>
+                         </div>
+                       )}
+                    </div>
+                 </div>
+              </div>
+           </div>
+        </div>
+      );
+    }
+
+    const baseFiltered = orders.filter(o => o.source === source);
+    const finalFiltered = filteredOrdersBySearch(baseFiltered);
+
+    return (
+      <div className="space-y-10 animate-in fade-in">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <button onClick={() => setSubView('create')} className="px-10 py-5 bg-slate-900 text-white rounded-3xl font-black shadow-xl hover:scale-105 transition-all">บันทึก {viewTitle} ใหม่</button>
+          
+          <div className="relative w-full md:w-96 group">
+             <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+             </div>
+             <input 
+               type="text" 
+               placeholder="ค้นหาเลขบิล, ชื่อสินค้า, สาขา..." 
+               className="w-full pl-14 pr-5 py-4 bg-white border-2 border-slate-100 rounded-3xl text-sm font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 shadow-sm transition-all"
+               value={historySearchQuery}
+               onChange={(e) => setHistorySearchQuery(e.target.value)}
+             />
+             {historySearchQuery && (
+               <button 
+                 onClick={() => setHistorySearchQuery('')}
+                 className="absolute inset-y-0 right-5 flex items-center text-slate-300 hover:text-slate-500"
+               >
+                 ✕
+               </button>
+             )}
+          </div>
+        </div>
+
+        <div className="bg-white p-10 rounded-[3rem] border shadow-sm overflow-hidden">
+          <table className="w-full text-left font-bold text-slate-700">
+            <thead className="bg-slate-900 text-slate-400 uppercase text-[9px] tracking-widest">
+              <tr>
+                <th className="p-5 rounded-tl-3xl text-center w-16">#</th>
+                <th className="p-5">บิล</th>
+                <th className="p-5">วันที่</th>
+                <th className="p-5">เป้าหมาย</th>
+                <th className="p-5 text-center">สถานะ</th>
+                <th className="p-5 rounded-tr-3xl text-right">ยอดรวม</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {finalFiltered.map((o, idx) => (
+                <tr key={o.id} onClick={() => { setSelectedOrderId(o.id); setSubView('details'); }} className="hover:bg-slate-50 cursor-pointer group transition-all">
+                  <td className="p-5 text-center text-slate-300 font-black">{idx + 1}</td>
+                  <td className="p-5">
+                    <p className="text-slate-900 font-black group-hover:text-blue-600 transition-colors uppercase">{o.poNumber}</p>
+                    <p className="text-[9px] text-slate-300 font-medium">ID: {o.id}</p>
+                  </td>
+                  <td className="p-5 text-xs text-slate-400">{new Date(o.requestedAt).toLocaleDateString('th-TH')}</td>
+                  <td className="p-5">
+                    <p className="text-sm font-black text-slate-800">{o.storeName || o.influencerName || o.recipientName}</p>
+                    <p className="text-[10px] text-slate-400">{o.subBranch || '-'}</p>
+                  </td>
+                  <td className="p-5 text-center"><span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase border ${o.status === 'confirmed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>{o.status}</span></td>
+                  <td className="p-5 text-right font-black text-slate-900">฿{o.totalValue.toLocaleString()}</td>
+                </tr>
+              ))}
+              {finalFiltered.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-20 text-center">
+                    <div className="flex flex-col items-center gap-4">
+                       <p className="text-5xl grayscale opacity-30">🔍</p>
+                       <p className="text-slate-300 font-black uppercase italic tracking-widest">ไม่พบรายการที่ค้นหา</p>
+                       {historySearchQuery && <button onClick={() => setHistorySearchQuery('')} className="text-blue-500 text-xs font-bold hover:underline">ล้างการค้นหา</button>}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  const renderInventory = () => {
+    if (subView === 'add_product') {
+      return (
+        <div className="max-w-4xl mx-auto space-y-8 animate-in zoom-in-95 duration-300 pb-20">
+          <div className="flex justify-between items-center">
+            <h2 className="text-3xl font-black text-slate-900 italic tracking-tighter">
+              {isEditingProduct ? 'แก้ไขข้อมูลสินค้า' : 'เพิ่มสินค้าใหม่ลงระบบ'}
+            </h2>
+            <button onClick={() => setSubView('manage_inventory')} className="text-slate-400 font-bold hover:underline">ยกเลิก</button>
+          </div>
+          <form onSubmit={saveProduct} className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ชื่อสินค้า</label>
+                    <input required type="text" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">SKU / รหัสสินค้า</label>
+                    <input required type="text" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หมวดหมู่สินค้า (Category)</label>
+                      <select required className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none appearance-none" value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value})}>
+                        {PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หน่วยนับ</label>
+                      <input required type="text" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.unit} onChange={e => setProductForm({...productForm, unit: e.target.value})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ราคาต่อหน่วย (฿)</label>
+                      <input required type="number" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.unitPrice} onChange={e => setProductForm({...productForm, unitPrice: Number(e.target.value)})} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หมายเลขล็อต (Lot Number)</label>
+                      <input type="text" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.lotNumber} onChange={e => setProductForm({...productForm, lotNumber: e.target.value})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">วันที่ผลิต (MFD)</label>
+                      <input type="date" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.mfd} onChange={e => setProductForm({...productForm, mfd: e.target.value})} />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">วันหมดอายุ (EXP)</label>
+                      <input type="date" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.exp} onChange={e => setProductForm({...productForm, exp: e.target.value})} />
+                    </div>
                   </div>
                </div>
+               
+               <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white space-y-6">
+                  <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Initial Stock Allotment</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    {['stockPurchasing', 'stockContent', 'stockInfluencer', 'stockLive', 'stockAffiliate', 'stockBuffer'].map((key) => (
+                      <div key={key} className="space-y-1">
+                        <label className="text-[8px] font-black text-slate-500 uppercase">{key.replace('stock', '')}</label>
+                        <input type="number" className="w-full p-2 bg-white/10 border-none rounded-xl text-white font-black outline-none" value={productForm[key as keyof Product] as number} onChange={e => setProductForm({...productForm, [key]: Number(e.target.value)})} />
+                      </div>
+                    ))}
+                  </div>
+               </div>
+            </div>
 
-               {loginError && (
-                 <div className="bg-red-50 text-red-500 text-[10px] font-black uppercase tracking-widest p-3 rounded-xl text-center border border-red-100">
-                    {loginError}
-                 </div>
-               )}
+            <div className="space-y-4 pt-4 border-t border-slate-100">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Product Media (Image Upload)</label>
+               <div className="flex flex-wrap gap-4">
+                  {productForm.images?.map((img, idx) => (
+                     <div key={idx} className="relative w-28 h-28 rounded-2xl overflow-hidden border-4 border-slate-50 group shadow-sm transition-all hover:scale-105">
+                        <img src={img} className="w-full h-full object-cover" alt="" />
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            const newImgs = productForm.images?.filter((_, i) => i !== idx);
+                            setProductForm({...productForm, images: newImgs});
+                          }}
+                          className="absolute top-1 right-1 bg-red-500 text-white w-6 h-6 rounded-full text-[10px] font-black flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                        >✕</button>
+                     </div>
+                  ))}
+                  <label className="w-28 h-28 rounded-2xl border-4 border-dashed border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 hover:border-blue-200 transition-all text-slate-300 group">
+                     <span className="text-3xl group-hover:text-blue-500 transition-colors">+</span>
+                     <span className="text-[8px] font-black uppercase tracking-tighter group-hover:text-blue-500">Add Photo</span>
+                     <input 
+                       type="file" 
+                       className="hidden" 
+                       accept="image/*"
+                       multiple
+                       onChange={handleImageUpload} 
+                     />
+                  </label>
+               </div>
+               <p className="text-[9px] text-slate-400 font-bold italic">* Support multi-file upload. First image will be used as primary.</p>
+            </div>
 
-               <button 
-                 type="submit"
-                 className="w-full py-5 bg-slate-900 text-white rounded-3xl font-black text-sm shadow-xl shadow-slate-200 hover:translate-y-[-2px] transition-all active:scale-95"
-               >
-                 Authorize & Access
+            <div className="flex justify-end pt-8">
+               <button type="submit" className="px-12 py-5 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:scale-105 transition-all">
+                 {isEditingProduct ? 'บันทึกการแก้ไขสินค้า' : 'ยืนยันเพิ่มสินค้าลงคลัง'}
                </button>
-            </form>
+            </div>
+          </form>
+        </div>
+      );
+    }
 
-            <div className="mt-8 pt-8 border-t border-slate-100 flex flex-col items-center gap-2">
-               <p className="text-[10px] text-slate-400 font-bold">LAGLACE CO., LTD. &copy; 2024</p>
-               <p className="text-[9px] text-slate-300">Unauthorized access is strictly prohibited.</p>
+    return (
+      <div className="space-y-8 animate-in fade-in">
+         <div className="flex justify-between items-end">
+            <div>
+              <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">ศูนย์รวมคลังสินค้า (Master Inventory)</h2>
+              <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mt-1">Product Catalog & Stock Breakdown</p>
+            </div>
+            <button onClick={() => { setProductForm({ name: '', sku: '', unit: 'ชิ้น', category: PRODUCT_CATEGORIES[0], unitPrice: 0, stockPurchasing: 0, stockContent: 0, stockInfluencer: 0, stockLive: 0, stockAffiliate: 0, stockBuffer: 0, lotNumber: '', mfd: '', exp: '', images: [] }); setSubView('add_product'); setIsEditingProduct(null); }} className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:scale-105 transition-all flex items-center gap-3">
+              <span className="text-xl">+</span> เพิ่มสินค้าใหม่
+            </button>
+         </div>
+
+         <div className="bg-white rounded-[3rem] border shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-bold text-slate-700">
+                 <thead className="bg-slate-900 text-slate-400 text-[9px] font-black uppercase tracking-widest text-center">
+                    <tr>
+                      <th className="p-6 text-left rounded-tl-3xl">PRODUCT / SKU</th>
+                      <th className="p-6">CATEGORY</th>
+                      <th className="p-6 bg-slate-800 text-blue-300">PURCHASING</th>
+                      <th className="p-6">CONTENT</th>
+                      <th className="p-6 bg-slate-800 text-pink-300">INFLUENCER</th>
+                      <th className="p-6">LIVE</th>
+                      <th className="p-6 bg-slate-800 text-indigo-300">AFFILIATE</th>
+                      <th className="p-6 text-emerald-300">BUFFER</th>
+                      <th className="p-6 rounded-tr-3xl">ACTIONS</th>
+                    </tr>
+                 </thead>
+                 <tbody className="divide-y text-xs">
+                    {products.map(p => (
+                      <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-6 flex items-center gap-4">
+                          <img src={p.images[0] || 'https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?auto=format&fit=crop&q=80&w=300'} className="w-12 h-12 object-cover rounded-xl border" alt="" />
+                          <div>
+                            <p className="text-slate-900 font-black">{p.name}</p>
+                            <p className="text-[10px] text-slate-300 font-bold">{p.sku}</p>
+                            <p className="text-[8px] text-slate-400 mt-0.5">LOT: {p.lotNumber || 'N/A'}</p>
+                          </div>
+                        </td>
+                        <td className="p-6 text-center">
+                          <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-lg font-black text-[9px] uppercase tracking-tighter">{p.category.split(' ')[0]}</span>
+                        </td>
+                        <td className="p-6 text-center bg-slate-50/50 text-lg font-black">{p.stockPurchasing}</td>
+                        <td className="p-6 text-center text-lg font-black">{p.stockContent}</td>
+                        <td className="p-6 text-center bg-slate-50/50 text-lg font-black">{p.stockInfluencer}</td>
+                        <td className="p-6 text-center text-lg font-black">{p.stockLive}</td>
+                        <td className="p-6 text-center bg-slate-50/50 text-lg font-black">{p.stockAffiliate}</td>
+                        <td className="p-6 text-center text-lg font-black text-emerald-600">{p.stockBuffer}</td>
+                        <td className="p-6 text-center">
+                           <div className="flex items-center justify-center gap-2">
+                              <button onClick={() => { setIsEditingProduct(p.id); setProductForm(p); setSubView('add_product'); }} className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center hover:bg-slate-200" title="Edit">✏️</button>
+                              <button onClick={() => duplicateProduct(p)} className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center hover:bg-slate-200" title="Clone as Template">📋</button>
+                           </div>
+                        </td>
+                      </tr>
+                    ))}
+                 </tbody>
+              </table>
             </div>
          </div>
       </div>
     );
-  }
-
-  const renderView = () => {
-    switch (activeView) {
-      case View.DASHBOARD: return <Dashboard orders={orders} products={products} stores={stores} influencers={influencers} users={users} setActiveView={setActiveView} />;
-      case View.AI_CHAT: return <AiChat products={products} orders={orders} />;
-      case View.EXPORT: return <ExportReports orders={orders} products={products} stores={stores} influencers={influencers} users={users} />;
-      case View.NEWS_ANNOUNCEMENT: return <NewsAnnouncement />;
-      
-      case View.SHIPMENTS:
-        return (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-end gap-4">
-              <div>
-                <h2 className="text-2xl font-black text-slate-800">Tracking Dispatched Items</h2>
-                <p className="text-xs text-slate-400">ตรวจสอบเลขพัสดุและสถานะการจัดส่งแยกตามกลุ่มใบสั่งซื้อ</p>
-              </div>
-              <div className="bg-pink-50 border border-pink-100 px-6 py-3 rounded-2xl flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-[9px] font-black text-pink-400 uppercase tracking-widest">MT Total Dispatched</p>
-                  <p className="text-xl font-black text-pink-600">{orders.filter(o => o.status === 'confirmed').reduce((s,o) => s+o.quantity, 0).toLocaleString()} <span className="text-[10px]">Units</span></p>
-                </div>
-                <div className="w-px h-8 bg-pink-100"></div>
-                <div className="text-right">
-                  <p className="text-[9px] font-black text-pink-400 uppercase tracking-widest">Total Market Value</p>
-                  <p className="text-xl font-black text-pink-600">฿{orders.filter(o => o.status === 'confirmed').reduce((s,o) => s + (o.quantity * (products.find(p => p.id === o.productId)?.unitPrice || 0)), 0).toLocaleString()}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-[2rem] border shadow-sm grid grid-cols-1 md:grid-cols-5 gap-4">
-               <div>
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1 tracking-widest">Search Order ID</label>
-                  <input 
-                    type="text" 
-                    placeholder="ค้นหารหัสรายการ..." 
-                    className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none border-slate-100 focus:border-pink-300"
-                    value={shipmentSearch}
-                    onChange={e => setShipmentSearch(e.target.value)}
-                  />
-               </div>
-               <div>
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1 tracking-widest">หน้าร้าน / Identity</label>
-                  <select 
-                    className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none border-slate-100"
-                    value={shipmentStoreFilter}
-                    onChange={e => {
-                      setShipmentStoreFilter(e.target.value);
-                      setShipmentBranchFilter('all');
-                    }}
-                  >
-                    <option value="all">ทุกร้านค้า/Influencer</option>
-                    <optgroup label="Modern Trade">
-                      {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                    </optgroup>
-                    <optgroup label="Influencers">
-                      {influencers.map(inf => <option key={inf.id} value={inf.name}>{inf.name}</option>)}
-                    </optgroup>
-                  </select>
-               </div>
-               <div>
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1 tracking-widest">สาขา (Sub Branch)</label>
-                  <select 
-                    className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none border-slate-100"
-                    value={shipmentBranchFilter}
-                    onChange={e => setShipmentBranchFilter(e.target.value)}
-                    disabled={shipmentStoreFilter === 'all'}
-                  >
-                    <option value="all">ทุกสาขา</option>
-                    {stores.find(s => s.name === shipmentStoreFilter)?.subBranches?.map(b => (
-                      <option key={b} value={b}>{b}</option>
-                    ))}
-                    {shipmentStoreFilter !== 'all' && !stores.find(s => s.name === shipmentStoreFilter) && <option value="อื่นๆ">อื่นๆ</option>}
-                  </select>
-               </div>
-               <div className="md:col-span-2">
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1 tracking-widest">ช่วงวันที่จัดส่ง</label>
-                  <div className="flex gap-2">
-                    <input type="date" className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none border-slate-100" value={shipmentStartDate} onChange={e => setShipmentStartDate(e.target.value)} />
-                    <input type="date" className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none border-slate-100" value={shipmentEndDate} onChange={e => setShipmentEndDate(e.target.value)} />
-                  </div>
-               </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-8">
-               {confirmedMtGroups.length === 0 ? (
-                  <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300">
-                    <p className="text-slate-400 font-black uppercase tracking-widest">No matching shipments found</p>
-                  </div>
-               ) : confirmedMtGroups.map((group, idx) => {
-                 const orderIds = group.orders.map(o => o.id);
-                 return (
-                  <div key={idx} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden transition-all hover:shadow-md border-t-8 border-t-pink-500 animate-in fade-in slide-in-from-bottom-4">
-                    <div className="bg-slate-50 p-6 border-b flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                        <div>
-                           <div className="flex items-center gap-3 mb-1">
-                              <h3 className="text-xl font-black text-slate-800 tracking-tight">{group.title}</h3>
-                              <span className="bg-white border border-slate-200 px-2 py-0.5 rounded text-[10px] font-black text-slate-400">{group.orders.length} Items</span>
-                           </div>
-                           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">
-                              📍 {group.subTitle} | 📅 {group.date} | ⏰ {group.time}
-                           </p>
-                        </div>
-                        <div className="flex-1 max-w-md w-full">
-                           <label className="block text-[10px] font-black text-pink-600 uppercase mb-1.5 tracking-widest text-right">เลขพัสดุขนส่ง (Tracking Number)</label>
-                           <input 
-                              type="text" 
-                              placeholder="กรอกเลขพัสดุสำหรับรอบจัดส่งนี้..." 
-                              className="w-full p-3.5 bg-white border-2 border-pink-100 rounded-2xl text-right font-black text-slate-800 focus:border-pink-500 focus:ring-4 focus:ring-pink-50 outline-none transition-all shadow-sm"
-                              value={group.trackingNumber || ''}
-                              onChange={(e) => handleUpdateTrackingNumberForGroup(orderIds, e.target.value)}
-                           />
-                        </div>
-                    </div>
-
-                    <div className="p-0 overflow-x-auto">
-                       <table className="w-full text-left">
-                          <thead className="bg-slate-100/50 border-b text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                             <tr>
-                                <th className="px-8 py-3">Product Description</th>
-                                <th className="px-8 py-3 text-center">รหัสรายการ (Order ID)</th>
-                                <th className="px-8 py-3 text-center">Qty Sent</th>
-                                <th className="px-8 py-3">หมายเหตุ (Notes)</th>
-                                <th className="px-8 py-3 text-right">Total Value</th>
-                             </tr>
-                          </thead>
-                          <tbody className="divide-y text-xs font-bold text-slate-700">
-                             {group.orders.map(o => {
-                                const product = products.find(p => p.id === o.productId);
-                                const totalValue = o.quantity * (product?.unitPrice || 0);
-                                return (
-                                   <tr key={o.id} className="hover:bg-slate-50/30 transition-colors">
-                                      <td className="px-8 py-4">
-                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-lg bg-slate-50 border overflow-hidden flex-shrink-0">
-                                               <img src={product?.images[0]} className="w-full h-full object-cover" alt="" />
-                                            </div>
-                                            <div>
-                                               <p className="text-slate-900 font-black">{o.productName}</p>
-                                               <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">SKU: {product?.sku}</p>
-                                            </div>
-                                         </div>
-                                      </td>
-                                      <td className="px-8 py-4 text-center">
-                                         <span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-lg text-[10px] font-black border border-blue-100">#{o.id}</span>
-                                      </td>
-                                      <td className="px-8 py-4 text-center">
-                                         <span className="bg-slate-900 text-white px-3 py-1 rounded-full text-[10px] font-black">{o.quantity}</span>
-                                      </td>
-                                      <td className="px-8 py-4">
-                                         <input 
-                                           type="text" 
-                                           placeholder="พิมพ์หมายเหตุ..." 
-                                           className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-slate-200 outline-none transition-all"
-                                           value={o.warehouseNote || ''}
-                                           onChange={(e) => handleUpdateWarehouseNote(o.id, e.target.value)}
-                                         />
-                                      </td>
-                                      <td className="px-8 py-4 text-right font-black text-slate-900">฿{totalValue.toLocaleString()}</td>
-                                   </tr>
-                                );
-                             })}
-                             <tr className="bg-slate-50/50">
-                                <td colSpan={4} className="px-8 py-4 text-right text-[10px] font-black uppercase text-slate-400 tracking-widest">Shipment Total Market Value</td>
-                                <td className="px-8 py-4 text-right font-black text-lg text-pink-600">
-                                   ฿{group.orders.reduce((sum, o) => {
-                                      const p = products.find(prod => prod.id === o.productId);
-                                      return sum + (o.quantity * (p?.unitPrice || 0));
-                                   }, 0).toLocaleString()}
-                                </td>
-                             </tr>
-                          </tbody>
-                       </table>
-                    </div>
-                  </div>
-                 );
-               })}
-            </div>
-          </div>
-        );
-
-      case View.INVENTORY: return (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-               <div className="bg-blue-50/50 p-5 rounded-3xl border border-blue-100">
-                  <p className="text-[10px] font-black text-blue-400 uppercase mb-1">Purchasing</p>
-                  <p className="text-xl font-black text-blue-700">{stockSummary.purchasing.toLocaleString()}</p>
-               </div>
-               <div className="bg-purple-50/50 p-5 rounded-3xl border border-purple-100">
-                  <p className="text-[10px] font-black text-purple-400 uppercase mb-1">Influencer</p>
-                  <p className="text-xl font-black text-purple-700">{stockSummary.influencer.toLocaleString()}</p>
-               </div>
-               <div className="bg-red-50/50 p-5 rounded-3xl border border-red-100">
-                  <p className="text-[10px] font-black text-red-400 uppercase mb-1">Live</p>
-                  <p className="text-xl font-black text-red-700">{stockSummary.live.toLocaleString()}</p>
-               </div>
-               <div className="bg-emerald-50/50 p-5 rounded-3xl border border-emerald-100">
-                  <p className="text-[10px] font-black text-emerald-400 uppercase mb-1">Affiliate</p>
-                  <p className="text-xl font-black text-emerald-700">{stockSummary.affiliate.toLocaleString()}</p>
-               </div>
-               <div className="bg-slate-50/50 p-5 rounded-3xl border border-slate-100">
-                  <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Buffer Stock Warehouse</p>
-                  <p className="text-xl font-black text-slate-700">{stockSummary.buffer.toLocaleString()}</p>
-               </div>
-               <div className="bg-white p-5 rounded-3xl border shadow-sm ring-1 ring-slate-100">
-                  <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Total Overall</p>
-                  <p className="text-xl font-black text-black">{stockSummary.total.toLocaleString()}</p>
-               </div>
-            </div>
-
-            <div className="bg-white rounded-3xl shadow-sm border overflow-hidden">
-              <div className="p-6 border-b flex flex-col md:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-4">
-                  <div>
-                    <h3 className="font-black text-slate-800">{isCatalogMode ? 'จัดการรายการสินค้า (Catalog)' : 'จัดการสต็อก (Warehouse Logic)'}</h3>
-                    <p className="text-xs text-slate-400">{isCatalogMode ? 'เพิ่ม ลบ และแก้ไขข้อมูลทางเทคนิคของสินค้า' : 'ระบุจำนวนที่ต้องการปรับปรุงยอดสต็อกแต่ละประเภท'}</p>
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                   {!isCatalogMode && (
-                     <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border">
-                        <input 
-                          type="checkbox" 
-                          id="wh-only" 
-                          className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
-                          checked={isWarehouseOnlyFilter}
-                          onChange={e => setIsWarehouseOnlyFilter(e.target.checked)}
-                        />
-                        <label htmlFor="wh-only" className="text-xs font-black text-slate-600 uppercase">Buffer Stock Only</label>
-                      </div>
-                   )}
-                   <select value={inventoryCategoryFilter} onChange={e => setInventoryCategoryFilter(e.target.value)} className="p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none">
-                      {categories.map(c => <option key={c} value={c}>{c === 'All' ? 'ทุกหมวดหมู่' : c}</option>)}
-                   </select>
-                   <button 
-                    onClick={() => setIsCatalogMode(!isCatalogMode)}
-                    className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all ${isCatalogMode ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}
-                   >
-                     {isCatalogMode ? 'กลับไปที่สต็อก' : 'จัดการ Catalog'}
-                   </button>
-                   {isCatalogMode && (
-                     <button onClick={() => setShowAddProductModal(true)} className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-black">+ เพิ่มสินค้า</button>
-                   )}
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  {isCatalogMode ? (
-                    <>
-                      <thead className="bg-slate-50 text-slate-400 uppercase font-black text-[9px] border-b">
-                        <tr>
-                          <th className="px-6 py-4">ข้อมูลสินค้า</th>
-                          <th className="px-6 py-4 text-center">Market Price</th>
-                          <th className="px-6 py-4 text-center">Lead Time</th>
-                          <th className="px-6 py-4">SKU / Barcodes</th>
-                          <th className="px-6 py-4">Description</th>
-                          <th className="px-6 py-4 text-center">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y text-[11px] font-bold">
-                        {filteredInventoryProducts.map(p => (
-                          <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4">
-                               <div className="flex items-center gap-3">
-                                  <img src={p.images[0]} className="w-12 h-12 rounded-lg object-cover border" alt="" />
-                                  <div>
-                                     <p className="text-[12px] font-black text-slate-800">{p.name}</p>
-                                     <p className="text-[9px] text-blue-500 font-bold uppercase">{p.category} | {p.unit}</p>
-                                  </div>
-                               </div>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                               <p className="text-slate-800">฿{p.unitPrice?.toLocaleString() || 0}</p>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                               <p className="text-pink-500 font-black uppercase tracking-tighter">{p.leadTime || 'N/A'}</p>
-                            </td>
-                            <td className="px-6 py-4">
-                               <p className="text-slate-700">SKU: {p.sku}</p>
-                               <p className="text-[9px] text-slate-400">MT: {p.barcodeMT || '-'}</p>
-                            </td>
-                            <td className="px-6 py-4 max-w-xs">
-                               <p className="text-slate-500 line-clamp-2">{p.description || 'ไม่มีคำอธิบาย'}</p>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                               <button onClick={() => initiateDeleteProduct(p.id)} className="p-2 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                               </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </>
-                  ) : (
-                    <>
-                      <thead className="bg-slate-50 text-slate-400 uppercase font-black text-[9px] border-b">
-                        <tr>
-                          <th className="px-6 py-4">สินค้า</th>
-                          <th className="px-6 py-4 text-center">PC</th>
-                          <th className="px-6 py-4 text-center">INF</th>
-                          <th className="px-6 py-4 text-center">LIVE</th>
-                          <th className="px-6 py-4 text-center">AFF</th>
-                          <th className="px-6 py-4 text-center bg-slate-100 text-slate-800">BUFFER STOCK WAREHOUSE</th>
-                          <th className="px-6 py-4 text-center font-black text-black">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {filteredInventoryProducts.map(p => (
-                          <tr key={p.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="px-6 py-4">
-                               <div className="flex items-center gap-3">
-                                  <img src={p.images[0]} className="w-8 h-8 rounded-lg object-cover border" alt="" />
-                                  <div>
-                                     <p className="text-[11px] font-black">{p.name}</p>
-                                     <p className="text-[9px] text-slate-400 font-bold uppercase">{p.id}</p>
-                                  </div>
-                               </div>
-                            </td>
-                            {[
-                              { val: p.stockPurchasing, type: InventoryType.PURCHASING, color: 'blue' },
-                              { val: p.stockInfluencer, type: InventoryType.INFLUENCERS, color: 'purple' },
-                              { val: p.stockLive, type: InventoryType.LIVE, color: 'red' },
-                              { val: p.stockAffiliate, type: InventoryType.AFFILIATE, color: 'emerald' },
-                              { val: p.stockBuffer, type: InventoryType.BUFFER, color: 'slate' }
-                            ].map((cell, idx) => (
-                              <td key={idx} className={`px-4 py-4 ${cell.type === InventoryType.BUFFER ? 'bg-slate-50' : ''}`}>
-                                 <div className="flex flex-col items-center gap-1">
-                                    <span className={`text-xs font-black text-${cell.color}-700`}>{cell.val.toLocaleString()}</span>
-                                    {currentUser?.canAdjustStock && (
-                                      <div className="flex items-center gap-1 scale-90">
-                                         <input type="number" placeholder="0" className="w-12 p-1 text-center text-[10px] font-bold border rounded" value={adjustments[p.id]?.[cell.type] || ''} onChange={e => updateAdjustmentValue(p.id, cell.type, e.target.value)} />
-                                         <button onClick={() => initiateAdjustment(p.id, cell.type)} disabled={!adjustments[p.id]?.[cell.type]} className={`w-5 h-5 bg-${cell.color}-600 text-white rounded flex items-center justify-center text-[10px]`}>✓</button>
-                                      </div>
-                                    )}
-                                 </div>
-                              </td>
-                            ))}
-                            <td className="px-6 py-4 text-center">
-                               <span className="text-xs font-black text-black">{(p.stockPurchasing + p.stockInfluencer + p.stockLive + p.stockAffiliate + p.stockBuffer).toLocaleString()}</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </>
-                  )}
-                </table>
-              </div>
-            </div>
-          </div>
-      );
-
-      case View.PURCHASING:
-      case View.INFLUENCER_DEP:
-      case View.LIVE_DEP:
-      case View.AFFILIATE_DEP:
-      case View.BUFFER_DEP:
-        const currentIsInfluencer = activeView === View.INFLUENCER_DEP;
-        return (
-          <div className="space-y-12">
-            <div className={`bg-white p-6 rounded-3xl shadow-sm border-t-4 flex flex-col items-end gap-6 sticky top-20 z-20 ${currentIsInfluencer ? 'border-t-purple-500' : 'border-t-blue-500'}`}>
-              <div className="flex-1 w-full grid grid-cols-1 md:grid-cols-5 gap-4">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Processing Channel</label>
-                  <select 
-                    value={activeView === View.PURCHASING ? processingChannel : (activeView === View.INFLUENCER_DEP ? 'influencer' : (activeView === View.LIVE_DEP ? 'live' : (activeView === View.AFFILIATE_DEP ? 'affiliate' : 'buffer')))} 
-                    onChange={e => setProcessingChannel(e.target.value as OrderSource)} 
-                    disabled={activeView !== View.PURCHASING}
-                    className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold"
-                  >
-                    <option value="purchasing">Purchasing Channel</option>
-                    <option value="influencer">Influencer Channel</option>
-                    <option value="live">Live Channel</option>
-                    <option value="affiliate">Affiliate Channel</option>
-                    <option value="buffer">Buffer Stock Warehouse Channel</option>
-                  </select>
-                </div>
-                {!currentIsInfluencer ? (
-                  <>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Main Store</label>
-                      <select value={selectedStore} onChange={e => { setSelectedStore(e.target.value); setSelectedSubBranch(''); }} className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold">
-                        {stores.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Sub Branch</label>
-                      <select value={selectedSubBranch} onChange={e => setSelectedSubBranch(e.target.value)} className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold">
-                        <option value="">เลือกสาขาย่อย...</option>
-                        {currentStoreData?.subBranches?.map(b => <option key={b} value={b}>{b}</option>)}
-                        <option value="อื่นๆ">อื่นๆ</option>
-                      </select>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Influencer Identity</label>
-                      <select value={selectedInfluencerName} onChange={e => setSelectedInfluencerName(e.target.value)} className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold">
-                        {influencers.map(inf => <option key={inf.id} value={inf.name}>{inf.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Notes</label>
-                      <input type="text" placeholder="ระบุเพิ่มเติม..." className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold" value={influencerFirstName} onChange={e => setInfluencerFirstName(e.target.value)} />
-                    </div>
-                  </>
-                )}
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Category Filter</label>
-                  <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)} className="w-full p-3 bg-slate-50 border rounded-xl text-xs font-bold">
-                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
-              <button onClick={() => setShowReporterModal(true)} disabled={Object.keys(draftOrder).length === 0} className={`px-8 py-3.5 rounded-2xl font-black text-sm text-white ${currentIsInfluencer ? 'bg-purple-600 shadow-purple-200' : 'bg-blue-600 shadow-blue-200'} shadow-xl transition-all active:scale-95`}>
-                ส่งใบจองสต็อก ({Object.keys(draftOrder).length})
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-4">
-              {filteredPurchasingProducts.map(p => (
-                <div key={p.id} className="bg-white rounded-2xl border p-3 text-center cursor-pointer hover:shadow-lg transition-all group" onClick={() => incrementDraft(p.id, 1)}>
-                   <div className="relative mb-2 overflow-hidden rounded-xl">
-                     <img src={p.images[0]} className="w-full h-24 object-cover transition-transform group-hover:scale-110" alt="" />
-                     {draftOrder[p.id] && (
-                       <div className="absolute top-1 right-1 bg-blue-600 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black border-2 border-white shadow-md animate-in zoom-in">
-                        {draftOrder[p.id].quantity}
-                       </div>
-                     )}
-                   </div>
-                   <h4 className="text-[11px] font-bold truncate text-slate-700">{p.name}</h4>
-                   <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">฿{p.unitPrice?.toLocaleString() || 0}</p>
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-white rounded-3xl shadow-sm border overflow-hidden mt-10">
-               <div className="p-6 border-b bg-slate-50/50 flex justify-between items-center">
-                  <div>
-                    <h3 className="font-black text-slate-800">📋 ประวัติการจองสต็อก</h3>
-                    <p className="text-xs text-slate-400">รายการล่าสุดจากแผนกของคุณ</p>
-                  </div>
-               </div>
-               <div className="overflow-x-auto">
-                  <table className="w-full text-left text-[11px]">
-                    <thead className="bg-slate-50 text-slate-400 font-black uppercase text-[9px] border-b">
-                       <tr>
-                          <th className="px-6 py-4">Transaction</th>
-                          <th className="px-6 py-4">Target Entity</th>
-                          <th className="px-6 py-4">Product</th>
-                          <th className="px-6 py-4 text-center">Qty</th>
-                          <th className="px-6 py-4 text-center">Status</th>
-                       </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                       {deptHistory.length === 0 ? (
-                         <tr><td colSpan={5} className="px-6 py-10 text-center text-slate-300 font-black uppercase tracking-widest">No Recent activity</td></tr>
-                       ) : deptHistory.map(h => (
-                         <tr key={h.id} className="hover:bg-slate-50/30 transition-colors">
-                            <td className="px-6 py-4">
-                               <p className="font-black text-slate-800">{h.id}</p>
-                               <p className="text-[9px] text-slate-400">{new Date(h.requestedAt).toLocaleString('th-TH')}</p>
-                            </td>
-                            <td className="px-6 py-4">
-                               <p className="font-bold text-slate-600">{h.storeName || h.influencerName}</p>
-                               {h.subBranch && <span className="text-[9px] text-blue-500 font-black uppercase tracking-tight">{h.subBranch}</span>}
-                            </td>
-                            <td className="px-6 py-4 font-medium">{h.productName}</td>
-                            <td className="px-6 py-4 text-center">
-                               <div className="flex flex-col">
-                                 <span className="text-slate-300 font-bold">{h.requestedQuantity}</span>
-                                 <span className="text-blue-600 font-black text-sm">{h.status === 'confirmed' ? h.quantity : '-'}</span>
-                               </div>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                               <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${
-                                 h.status === 'confirmed' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                 h.status === 'cancelled' ? 'bg-red-50 text-red-600 border-red-100' :
-                                 'bg-amber-50 text-amber-600 border-amber-100'
-                               }`}>
-                                 {h.status}
-                               </span>
-                            </td>
-                         </tr>
-                       ))}
-                    </tbody>
-                  </table>
-               </div>
-            </div>
-          </div>
-        );
-
-      case View.WAREHOUSE:
-        return (
-          <div className="space-y-6">
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-               <div>
-                  <h2 className="text-2xl font-black text-slate-800">จัดการออเดอร์คลังสินค้า</h2>
-                  <p className="text-xs text-slate-400">ตรวจสอบและยืนยันยอดส่งจริงรายกลุ่มออเดอร์</p>
-               </div>
-               <div className="flex gap-2">
-                  <button onClick={handleBulkConfirm} className="px-5 py-2.5 bg-emerald-600 text-white rounded-2xl text-xs font-bold shadow-lg shadow-emerald-50 active:scale-95 transition-all">Bulk Confirm All (PIN)</button>
-                  <button onClick={fetchAiAnalysis} disabled={isAiLoading} className="px-5 py-2.5 bg-indigo-600 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-50 active:scale-95 transition-all">✨ AI Analysis</button>
-               </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-3xl border shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4">
-               <div>
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Status</label>
-                  <select className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none" value={whStatusFilter} onChange={e => setWhStatusFilter(e.target.value as any)}>
-                    <option value="all">All Status</option>
-                    <option value="pending">Pending Only</option>
-                    <option value="confirmed">Confirmed Only</option>
-                  </select>
-               </div>
-               <div>
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Source Dept</label>
-                  <select className="w-full p-2.5 bg-slate-50 border rounded-xl text-xs font-bold outline-none" value={whSourceFilter} onChange={e => setWhSourceFilter(e.target.value as any)}>
-                    <option value="all">All Departments</option>
-                    <option value="purchasing">Purchasing</option>
-                    <option value="influencer">Influencer</option>
-                    <option value="live">Live</option>
-                    <option value="affiliate">Affiliate</option>
-                    <option value="buffer">Buffer Stock Warehouse</option>
-                  </select>
-               </div>
-               <div className="md:col-span-2">
-                  <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Quick Search</label>
-                  <input type="text" placeholder="Search entity, product..." className="w-full p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold outline-none" value={whSearch} onChange={e => setWhSearch(e.target.value)} />
-               </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-8">
-               {groupedWarehouseOrders.length === 0 ? (
-                  <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-300">
-                    <p className="text-slate-400 font-black uppercase tracking-widest">No matching orders found</p>
-                  </div>
-               ) : groupedWarehouseOrders.map((group, gIdx) => (
-                  <div key={gIdx} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 transition-all hover:shadow-md">
-                     <div className="bg-slate-900 p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b">
-                        <div>
-                           <div className="flex items-center gap-3 mb-1">
-                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-lg uppercase ${group.source === 'buffer' ? 'bg-pink-500 text-white' : 'bg-blue-600 text-white'}`}>
-                                 {group.source === 'buffer' ? 'Buffer Stock' : group.source}
-                              </span>
-                              <h3 className="text-xl font-black text-white tracking-tight">{group.title}</h3>
-                           </div>
-                           <p className="text-slate-400 text-xs font-bold">
-                              📍 {group.subTitle} | 📅 {group.date} | ⏰ {group.time}
-                           </p>
-                        </div>
-                        <div className="bg-slate-800 px-4 py-2 rounded-2xl border border-slate-700">
-                           <p className="text-[10px] text-slate-500 font-black uppercase text-center mb-0.5">Total SKU Items</p>
-                           <p className="text-white font-black text-center">{group.orders.length}</p>
-                        </div>
-                     </div>
-
-                     <div className="p-4 md:p-8 space-y-4">
-                        {group.orders.map(o => (
-                           <div key={o.id} className={`flex flex-col md:flex-row items-start md:items-center justify-between p-5 rounded-2xl border transition-all ${o.status === 'confirmed' ? 'bg-emerald-50/30 border-emerald-100' : 'bg-white hover:bg-slate-50'}`}>
-                              <div className="flex-1 min-w-0">
-                                 <div className="flex items-center gap-2 mb-1">
-                                    <span className="text-[10px] font-black text-slate-400">#{o.id}</span>
-                                    <h4 className="text-sm font-black text-slate-800 truncate">{o.productName}</h4>
-                                 </div>
-                                 <div className="flex gap-4">
-                                    <p className="text-xs font-bold text-slate-500">Requested: <span className="text-slate-900">{o.requestedQuantity}</span></p>
-                                    <p className="text-xs font-bold text-slate-400">By: {o.purchasingDept}</p>
-                                 </div>
-                              </div>
-
-                              <div className="flex items-center gap-4 mt-4 md:mt-0 w-full md:w-auto justify-between md:justify-end">
-                                 <div className="flex items-center gap-3">
-                                    <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest hidden md:block">Confirm Qty</p>
-                                    <div className="flex items-center bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                                       {o.status === 'pending' && <button onClick={() => handleWhQuantityChange(o.id, -1)} className="px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors font-black text-slate-400">-</button>}
-                                       <span className="px-4 py-2 font-black text-slate-900 min-w-[3rem] text-center">{o.quantity}</span>
-                                       {o.status === 'pending' && <button onClick={() => handleWhQuantityChange(o.id, 1)} className="px-3 py-2 bg-slate-50 hover:bg-slate-100 transition-colors font-black text-slate-400">+</button>}
-                                    </div>
-                                 </div>
-
-                                 <div className="flex items-center gap-2">
-                                    {o.status === 'pending' ? (
-                                       <>
-                                          <button 
-                                             onClick={() => handleUpdateOrderStatus(o.id, 'cancelled')} 
-                                             className="w-10 h-10 flex items-center justify-center text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                                             title="Reject Order"
-                                          >
-                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                             </svg>
-                                          </button>
-                                          <button 
-                                             onClick={() => handleUpdateOrderStatus(o.id, 'confirmed')} 
-                                             className="w-12 h-12 bg-blue-600 text-white flex items-center justify-center rounded-xl shadow-lg shadow-blue-100 hover:scale-105 active:scale-95 transition-all"
-                                             title="Confirm & Dispatch"
-                                          >
-                                             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                             </svg>
-                                          </button>
-                                       </>
-                                    ) : (
-                                       <div className="text-right flex items-center gap-3">
-                                          <div className="flex flex-col items-end">
-                                             <span className={`text-[10px] font-black uppercase tracking-widest ${o.status === 'confirmed' ? 'text-emerald-500' : 'text-red-500'}`}>{o.status} ✓</span>
-                                             <p className="text-[8px] text-slate-400 font-bold uppercase">{o.processedAt ? new Date(o.processedAt).toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit'}) : ''}</p>
-                                          </div>
-                                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${o.status === 'confirmed' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
-                                             {o.status === 'confirmed' ? (
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                                   <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                                </svg>
-                                             ) : (
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                                   <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                                                </svg>
-                                             )}
-                                          </div>
-                                       </div>
-                                    )}
-                                 </div>
-                              </div>
-                           </div>
-                        ))}
-                     </div>
-                  </div>
-               ))}
-            </div>
-          </div>
-        );
-
-      case View.SETTINGS:
-        return (
-          <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm max-w-4xl mx-auto space-y-12">
-             <div className="flex border-b">
-                <button onClick={() => setSettingsTab('stores')} className={`flex-1 py-4 font-black text-sm border-b-2 transition-all ${settingsTab === 'stores' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>🛍️ Partner Stores</button>
-                <button onClick={() => setSettingsTab('users')} className={`flex-1 py-4 font-black text-sm border-b-2 transition-all ${settingsTab === 'users' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>👥 User Accounts</button>
-                {currentUser?.canManageAccounts && (
-                   <button onClick={() => setSettingsTab('system')} className={`flex-1 py-4 font-black text-sm border-b-2 transition-all ${settingsTab === 'system' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>🖥️ System Assets</button>
-                )}
-             </div>
-             
-             {settingsTab === 'stores' && (
-               <div>
-                  <h3 className="text-lg font-black mb-6 uppercase tracking-widest text-slate-400 text-center">Manage Partner Stores</h3>
-                  <div className="space-y-4">
-                     {stores.map(s => (
-                       <div key={s.id} className="bg-slate-50 p-4 rounded-3xl border border-slate-100 flex items-center justify-between">
-                          <span className="font-black text-slate-800">{s.name}</span>
-                          <button onClick={() => setStores(stores.filter(st => st.id !== s.id))} className="text-red-300 hover:text-red-500 text-xs font-bold">Remove</button>
-                       </div>
-                     ))}
-                     <button onClick={() => setShowAddStoreModal(true)} className="w-full py-4 bg-slate-900 text-white rounded-3xl font-black text-sm shadow-xl shadow-slate-200">Add New Store</button>
-                  </div>
-               </div>
-             )}
-
-             {settingsTab === 'users' && (
-               <div className="space-y-6">
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-lg font-black uppercase tracking-widest text-slate-400">Personnel & Permissions</h3>
-                    {currentUser?.canManageAccounts && (
-                      <button 
-                        onClick={() => setShowAddUserModal(true)}
-                        className="px-6 py-2 bg-slate-900 text-white rounded-2xl text-xs font-black shadow-lg shadow-slate-200"
-                      >
-                        + Create Account
-                      </button>
-                    )}
-                  </div>
-                  
-                  <div className="space-y-4">
-                    {users.map(u => (
-                      <div key={u.id} className="p-6 bg-white border border-slate-100 rounded-3xl flex justify-between items-center shadow-sm hover:shadow-md transition-all">
-                        <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center font-black text-blue-300 text-lg border border-blue-100">{u.name[0]}</div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-black text-slate-800 text-sm truncate">{u.name}</p>
-                              <p className="text-[10px] text-slate-400 font-bold mb-1 truncate">{u.email}</p>
-                              <div className="flex flex-wrap gap-2 mt-1">
-                                <span className="text-[8px] uppercase font-black tracking-widest px-2 py-0.5 bg-slate-900 text-white rounded-lg">{u.role}</span>
-                                <span className="text-[8px] uppercase font-black tracking-widest px-2 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg">{u.allowedViews.length} Features Enabled</span>
-                              </div>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                           {currentUser?.canManageAccounts && (
-                             <button 
-                               onClick={() => {
-                                 setEditingUser({...u});
-                                 setShowEditUserModal(true);
-                               }}
-                               className="p-3 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded-2xl transition-all"
-                               title="Edit User"
-                             >
-                               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                               </svg>
-                             </button>
-                           )}
-                           {currentUser?.canManageAccounts && u.id !== currentUser.id && (
-                             <button 
-                               onClick={() => initiateDeleteUser(u.id)}
-                               className="p-3 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-2xl transition-all"
-                               title="Delete User"
-                             >
-                               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                               </svg>
-                             </button>
-                           )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-               </div>
-             )}
-
-             {settingsTab === 'system' && currentUser?.canManageAccounts && (
-               <div className="space-y-8 animate-in fade-in duration-300">
-                  <div className="text-center mb-8">
-                     <h3 className="text-lg font-black uppercase tracking-widest text-slate-800">System Customization</h3>
-                     <p className="text-xs text-slate-400">เฉพาะผู้ดูแลระบบเท่านั้นที่สามารถแก้ไขส่วนนี้ได้</p>
-                  </div>
-
-                  <div className="bg-slate-50 p-8 rounded-[2rem] border-2 border-dashed border-slate-200">
-                     <div className="flex flex-col items-center gap-6">
-                        <div className="w-full max-w-lg aspect-video rounded-3xl bg-slate-200 overflow-hidden shadow-inner border-4 border-white relative group">
-                           {loginBg ? (
-                              <img src={loginBg} className="w-full h-full object-cover" alt="Login Background" />
-                           ) : (
-                              <div className="w-full h-full flex items-center justify-center text-slate-400 font-bold text-xs uppercase tracking-widest">Default Background</div>
-                           )}
-                           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                              <span className="text-white font-black text-xs uppercase">Current Asset Preview</span>
-                           </div>
-                        </div>
-                        
-                        <div className="flex flex-col items-center gap-4 w-full">
-                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">อัปโหลดภาพพื้นหลังใหม่ (แนะนำขนาด 1920 x 1080)</p>
-                           <div className="flex gap-3">
-                              <label className="px-8 py-3 bg-slate-900 text-white rounded-2xl font-black text-xs shadow-xl cursor-pointer hover:scale-105 transition-all">
-                                 เลือกไฟล์รูปภาพ
-                                 <input type="file" className="hidden" accept="image/*" onChange={handleBgUpload} />
-                              </label>
-                              {loginBg && (
-                                 <button 
-                                   onClick={handleResetBg}
-                                   className="px-8 py-3 border-2 border-red-100 text-red-500 rounded-2xl font-black text-xs hover:bg-red-50 transition-all"
-                                 >
-                                    ใช้ค่าเริ่มต้น
-                                 </button>
-                              )}
-                           </div>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 flex items-start gap-4">
-                     <div className="text-2xl">💡</div>
-                     <div>
-                        <p className="text-blue-900 font-black text-xs uppercase mb-1">Admin Guide</p>
-                        <p className="text-blue-700/70 text-xs font-medium leading-relaxed">
-                           ภาพที่คุณอัปโหลดจะถูกใช้เป็นพื้นหลังหลักของหน้าเข้าสู่ระบบ (Login Screen) สำหรับพอร์ทัลนี้ 
-                           กรุณาเลือกภาพที่มีความละเอียดสูงและไม่รบกวนการอ่านข้อความในกล่อง Login
-                        </p>
-                     </div>
-                  </div>
-               </div>
-             )}
-          </div>
-        );
-
-      default: return null;
-    }
   };
 
-  return (
-    <Layout activeView={activeView} setActiveView={changeView} currentUser={currentUser!} onLogout={handleLogout} orders={orders}>
-      {renderView()}
-      
-      {/* PIN Verification Modal */}
-      {showConfirmModal && (
-         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-            <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-8 animate-in zoom-in">
-              <div className="text-center mb-6">
-                 <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 text-2xl mx-auto mb-4">🔐</div>
-                 <h3 className="text-xl font-black text-slate-800">Security PIN Check</h3>
-                 <p className="text-xs text-slate-400 mt-1">authorized access required for critical actions</p>
-              </div>
-              
-              <div className="space-y-4">
-                 <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Entry PIN (1234)</label>
-                    <input type="password" placeholder="••••" className="w-full p-4 bg-slate-50 border rounded-2xl text-center text-3xl font-black outline-none tracking-[0.5em] text-black" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} />
-                    {passwordError && <p className="text-[10px] text-red-500 text-center mt-3 font-black uppercase">Invalid PIN. Try again.</p>}
-                 </div>
-              </div>
-
-              <div className="flex gap-3 mt-8">
-                 <button onClick={() => setShowConfirmModal(null)} className="flex-1 py-4 border rounded-3xl font-black text-sm text-slate-400">Cancel</button>
-                 <button onClick={handleVerifyPassword} className={`flex-1 py-4 ${showConfirmModal.type?.includes('delete') ? 'bg-red-500' : 'bg-blue-600'} text-white rounded-3xl font-black text-sm shadow-xl`}>Confirm</button>
-              </div>
-            </div>
-         </div>
-      )}
-
-      {/* Add User Modal */}
-      {showAddUserModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto py-10">
-           <div className="bg-white rounded-[2.5rem] p-10 w-full max-w-2xl animate-in zoom-in">
-              <div className="text-center mb-8">
-                 <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 text-3xl mx-auto mb-4">👤</div>
-                 <h3 className="text-xl font-black text-slate-800 tracking-tight">Create User Account</h3>
-                 <p className="text-xs text-slate-400 mt-1">Configure workspace access and security credentials</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-4">
-                   <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2 mb-4">Account Profile</h4>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Full Name</label>
-                      <input type="text" placeholder="Ex: John Doe" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Work Email Address</label>
-                      <input type="email" placeholder="name@laglace.com" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Account Password</label>
-                      <input type="text" placeholder="••••••••" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Primary Position</label>
-                      <select className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
-                         <option value={USER_ROLES.PURCHASING}>{USER_ROLES.PURCHASING}</option>
-                         <option value={USER_ROLES.WAREHOUSE}>{USER_ROLES.WAREHOUSE}</option>
-                         <option value={USER_ROLES.ADMIN}>{USER_ROLES.ADMIN}</option>
-                         <option value={USER_ROLES.LIVE}>{USER_ROLES.LIVE}</option>
-                         <option value={USER_ROLES.AFFILIATE}>{USER_ROLES.AFFILIATE}</option>
-                      </select>
-                   </div>
+  const renderWarehouse = () => {
+    if (warehouseSubView === 'fulfillment_history') {
+      const historyOrders = filteredOrdersBySearch(orders.filter(o => o.status === 'confirmed'));
+      return (
+        <div className="space-y-8 animate-in fade-in">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+             <div>
+                <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">ประวัติการเบิกและปรับจํานวนสินค้า</h2>
+                <button onClick={() => setWarehouseSubView('pending')} className="mt-2 text-blue-600 text-sm font-bold hover:underline">← กลับไปที่รายการรอเบิก</button>
+             </div>
+             
+             <div className="relative w-full md:w-80 group">
+                <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                   </svg>
                 </div>
+                <input 
+                  type="text" 
+                  placeholder="ค้นหาประวัติเบิก..." 
+                  className="w-full pl-14 pr-5 py-4 bg-white border-2 border-slate-100 rounded-3xl text-sm font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 shadow-sm transition-all"
+                  value={historySearchQuery}
+                  onChange={(e) => setHistorySearchQuery(e.target.value)}
+                />
+             </div>
+          </div>
 
-                <div>
-                   <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2 mb-4">Feature Access Rights</h4>
-                   <div className="grid grid-cols-1 gap-2 overflow-y-auto max-h-[300px] pr-2">
-                     {ALL_VIEWS.map(v => (
-                       <label key={v} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors">
-                         <input 
-                           type="checkbox" 
-                           className="w-4 h-4 rounded text-blue-600"
-                           checked={newUser.allowedViews?.includes(v)}
-                           onChange={(e) => {
-                             const current = newUser.allowedViews || [];
-                             if (e.target.checked) {
-                               setNewUser({...newUser, allowedViews: [...current, v]});
-                             } else {
-                               setNewUser({...newUser, allowedViews: current.filter(view => view !== v)});
-                             }
-                           }}
-                         />
-                         <span className="text-[11px] font-black text-slate-600 uppercase tracking-tighter truncate">{v.replace('_DEP', '')}</span>
-                       </label>
-                     ))}
-                   </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3 mt-10 pt-6 border-t">
-                 <button onClick={() => setShowAddUserModal(false)} className="flex-1 py-4 border rounded-3xl font-black text-sm text-slate-400">Cancel</button>
-                 <button onClick={handleAddUser} className="flex-1 py-4 bg-slate-900 text-white rounded-3xl font-black text-sm shadow-xl shadow-slate-200">Create Identity</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {/* Edit User Modal */}
-      {showEditUserModal && editingUser && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto py-10">
-           <div className="bg-white rounded-[2.5rem] p-10 w-full max-w-2xl animate-in zoom-in">
-              <div className="text-center mb-8">
-                 <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center text-blue-600 text-3xl mx-auto mb-4">⚙️</div>
-                 <h3 className="text-xl font-black text-slate-800 tracking-tight">Edit Identity & Rights</h3>
-                 <p className="text-xs text-slate-400 mt-1">Modify account details for <span className="text-blue-600 font-black">{editingUser.name}</span></p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="space-y-4">
-                   <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2 mb-4">Account Profile</h4>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Full Name</label>
-                      <input type="text" placeholder="Ex: John Doe" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={editingUser.name} onChange={e => setEditingUser({...editingUser, name: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Work Email Address</label>
-                      <input type="email" placeholder="name@laglace.com" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={editingUser.email} onChange={e => setEditingUser({...editingUser, email: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Account Password</label>
-                      <input type="text" placeholder="••••••••" className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={editingUser.password} onChange={e => setEditingUser({...editingUser, password: e.target.value})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1 tracking-widest">Primary Position</label>
-                      <select className="w-full p-4 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={editingUser.role} onChange={e => setEditingUser({...editingUser, role: e.target.value})}>
-                         <option value={USER_ROLES.PURCHASING}>{USER_ROLES.PURCHASING}</option>
-                         <option value={USER_ROLES.WAREHOUSE}>{USER_ROLES.WAREHOUSE}</option>
-                         <option value={USER_ROLES.ADMIN}>{USER_ROLES.ADMIN}</option>
-                         <option value={USER_ROLES.LIVE}>{USER_ROLES.LIVE}</option>
-                         <option value={USER_ROLES.AFFILIATE}>{USER_ROLES.AFFILIATE}</option>
-                      </select>
-                   </div>
-                </div>
-
-                <div>
-                   <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2 mb-4">Feature Access Rights</h4>
-                   <div className="grid grid-cols-1 gap-2 overflow-y-auto max-h-[300px] pr-2">
-                     {ALL_VIEWS.map(v => (
-                       <label key={v} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer hover:bg-slate-100 transition-colors">
-                         <input 
-                           type="checkbox" 
-                           className="w-4 h-4 rounded text-blue-600"
-                           checked={editingUser.allowedViews?.includes(v)}
-                           onChange={(e) => {
-                             const current = editingUser.allowedViews || [];
-                             if (e.target.checked) {
-                               setEditingUser({...editingUser, allowedViews: [...current, v]});
-                             } else {
-                               setEditingUser({...editingUser, allowedViews: current.filter(view => view !== v)});
-                             }
-                           }}
-                         />
-                         <span className="text-[11px] font-black text-slate-600 uppercase tracking-tighter truncate">{v.replace('_DEP', '')}</span>
-                       </label>
-                     ))}
-                   </div>
-                </div>
-              </div>
-
-              <div className="flex gap-3 mt-10 pt-6 border-t">
-                 <button onClick={() => { setShowEditUserModal(false); setEditingUser(null); }} className="flex-1 py-4 border rounded-3xl font-black text-sm text-slate-400">Cancel</button>
-                 <button onClick={handleSaveEditUser} className="flex-1 py-4 bg-slate-900 text-white rounded-3xl font-black text-sm shadow-xl shadow-slate-200">Save Changes</button>
-              </div>
-           </div>
-        </div>
-      )}
-
-      {showAddProductModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto py-10">
-          <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-5xl my-8 animate-in zoom-in">
-            <h3 className="text-2xl font-black mb-6 text-slate-800 tracking-tighter">New Product Logistics Entry</h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              {/* Left Column: General Info */}
-              <div className="space-y-6">
-                <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2">Core Identity</h4>
-                <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">ชื่อสินค้า</label>
-                  <input type="text" placeholder="ชื่อสินค้า..." className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.name || ''} onChange={e => setNewProduct({...newProduct, name: e.target.value})} />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">SKU Code</label>
-                    <input type="text" placeholder="SKU-XXXX" className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.sku || ''} onChange={e => setNewProduct({...newProduct, sku: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Category</label>
-                    <input 
-                      list="categories-list"
-                      placeholder="Select/Create..." 
-                      className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" 
-                      value={newProduct.category || ''} 
-                      onChange={e => setNewProduct({...newProduct, category: e.target.value})} 
-                    />
-                    <datalist id="categories-list">
-                      {categories.filter(c => c !== 'All').map(c => <option key={c} value={c} />)}
-                    </datalist>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Unit Price (฿)</label>
-                      <input type="number" placeholder="0.00" className="w-full p-3.5 bg-slate-900 text-emerald-400 border rounded-2xl text-sm font-black outline-none" value={newProduct.unitPrice || ''} onChange={e => setNewProduct({...newProduct, unitPrice: parseFloat(e.target.value) || 0})} />
-                   </div>
-                   <div>
-                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Lead Time (Duration)</label>
-                      <select className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.leadTime} onChange={e => setNewProduct({...newProduct, leadTime: e.target.value})}>
-                         {LEAD_TIME_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                   </div>
-                </div>
-                <div>
-                   <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Product Images</label>
-                   <div className="flex gap-2">
-                      <div className="w-16 h-16 border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center bg-slate-50 hover:bg-slate-100 cursor-pointer transition-all" onClick={() => {
-                        const url = prompt("ระบุ URL รูปภาพสินค้า:");
-                        if (url) setNewProduct({...newProduct, images: [...(newProduct.images || []), url].slice(0, 3)});
-                      }}>
-                         <span className="text-xl text-slate-300">+</span>
-                      </div>
-                      {newProduct.images?.map((img, idx) => (
-                        <div key={idx} className="relative w-16 h-16">
-                           <img src={img} className="w-full h-full object-cover rounded-xl border" alt="" />
-                           <button onClick={() => setNewProduct({...newProduct, images: newProduct.images?.filter((_, i) => i !== idx)})} className="absolute -top-1 -right-1 bg-red-500 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px]">✕</button>
-                        </div>
+          <div className="bg-white rounded-[3rem] border shadow-sm overflow-hidden">
+             <div className="overflow-x-auto">
+                <table className="w-full text-left font-bold text-slate-700">
+                   <thead className="bg-slate-900 text-slate-400 text-[9px] font-black uppercase tracking-widest">
+                      <tr>
+                        <th className="p-6 text-center w-16">#</th>
+                        <th className="p-6">วันที่ยืนยัน</th>
+                        <th className="p-6">เลขที่บิล</th>
+                        <th className="p-6">ฝ่าย/สาขา</th>
+                        <th className="p-6">รายการสินค้า</th>
+                        <th className="p-6 text-center">จำนวนเดิม</th>
+                        <th className="p-6 text-center text-emerald-400">เพิ่ม</th>
+                        <th className="p-6 text-center text-red-400">ลด</th>
+                        <th className="p-6 text-center bg-slate-800 text-white">ยอดสุทธิ</th>
+                      </tr>
+                   </thead>
+                   <tbody className="divide-y text-[11px]">
+                      {historyOrders.map((o, oIdx) => (
+                        <React.Fragment key={o.id}>
+                          {o.items.map((item, idx) => {
+                            const diff = item.quantity - item.originalQuantity;
+                            return (
+                              <tr key={`${o.id}-${idx}`} className="hover:bg-slate-50 transition-colors">
+                                {idx === 0 && (
+                                  <>
+                                    <td className="p-6 text-center align-top text-slate-300 font-black" rowSpan={o.items.length}>{oIdx + 1}</td>
+                                    <td className="p-6 align-top font-bold text-slate-400" rowSpan={o.items.length}>{new Date(o.processedAt || '').toLocaleDateString('th-TH')}</td>
+                                    <td className="p-6 align-top font-black text-slate-900 uppercase" rowSpan={o.items.length}>{o.poNumber}</td>
+                                    <td className="p-6 align-top" rowSpan={o.items.length}>{o.targetName || o.storeName || o.influencerName}</td>
+                                  </>
+                                )}
+                                <td className="p-6 border-l">{item.productName}</td>
+                                <td className="p-6 text-center bg-slate-50 font-black">{item.originalQuantity}</td>
+                                <td className="p-6 text-center text-emerald-600 font-black">{diff > 0 ? `+${diff}` : '-'}</td>
+                                <td className="p-6 text-center text-red-600 font-black">{diff < 0 ? diff : '-'}</td>
+                                <td className="p-6 text-center bg-slate-900 text-white font-black text-sm">{item.quantity}</td>
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
                       ))}
-                   </div>
-                </div>
-              </div>
-
-              {/* Middle Column: Initial Stock Levels */}
-              <div className="space-y-6">
-                <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2">Stock Allocation</h4>
-                <div className="grid grid-cols-2 gap-4">
-                   <div className="p-4 bg-blue-50/50 rounded-2xl border border-blue-100">
-                      <label className="block text-[9px] font-black text-blue-400 uppercase mb-1 tracking-widest">Purchasing</label>
-                      <input type="number" placeholder="0" className="w-full bg-transparent text-lg font-black text-blue-700 outline-none" value={newProduct.stockPurchasing || ''} onChange={e => setNewProduct({...newProduct, stockPurchasing: parseInt(e.target.value) || 0})} />
-                   </div>
-                   <div className="p-4 bg-purple-50/50 rounded-2xl border border-purple-100">
-                      <label className="block text-[9px] font-black text-purple-400 uppercase mb-1 tracking-widest">Influencer</label>
-                      <input type="number" placeholder="0" className="w-full bg-transparent text-lg font-black text-purple-700 outline-none" value={newProduct.stockInfluencer || ''} onChange={e => setNewProduct({...newProduct, stockInfluencer: parseInt(e.target.value) || 0})} />
-                   </div>
-                   <div className="p-4 bg-red-50/50 rounded-2xl border border-red-100">
-                      <label className="block text-[9px] font-black text-red-400 uppercase mb-1 tracking-widest">Live</label>
-                      <input type="number" placeholder="0" className="w-full bg-transparent text-lg font-black text-red-700 outline-none" value={newProduct.stockLive || ''} onChange={e => setNewProduct({...newProduct, stockLive: parseInt(e.target.value) || 0})} />
-                   </div>
-                   <div className="p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100">
-                      <label className="block text-[9px] font-black text-emerald-400 uppercase mb-1 tracking-widest">Affiliate</label>
-                      <input type="number" placeholder="0" className="w-full bg-transparent text-lg font-black text-emerald-700 outline-none" value={newProduct.stockAffiliate || ''} onChange={e => setNewProduct({...newProduct, stockAffiliate: parseInt(e.target.value) || 0})} />
-                   </div>
-                   <div className="p-4 bg-slate-50/50 rounded-2xl border border-slate-200 col-span-2">
-                      <label className="block text-[9px] font-black text-slate-400 uppercase mb-1 tracking-widest">Buffer Stock Warehouse</label>
-                      <input type="number" placeholder="0" className="w-full bg-transparent text-xl font-black text-slate-800 outline-none" value={newProduct.stockBuffer || ''} onChange={e => setNewProduct({...newProduct, stockBuffer: parseInt(e.target.value) || 0})} />
-                   </div>
-                </div>
-                <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 text-[10px] text-amber-700 font-bold flex gap-3">
-                   <div className="text-lg">💡</div>
-                   <div>System will initialize with these volumes. Prices affect global valuation.</div>
-                </div>
-              </div>
-
-              {/* Right Column: Dimensions & Dates */}
-              <div className="space-y-6">
-                <h4 className="text-[10px] font-black text-slate-900 uppercase tracking-widest border-b pb-2">Logistics & Dates</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">น้ำหนัก (kg)</label>
-                    <input type="number" step="0.01" className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.weight || ''} onChange={e => setNewProduct({...newProduct, weight: parseFloat(e.target.value)})} />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">Unit</label>
-                    <input type="text" placeholder="ชิ้น, ถุง..." className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.unit || ''} onChange={e => setNewProduct({...newProduct, unit: e.target.value})} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">วันที่ผลิต</label>
-                    <input type="date" className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.productionDate || ''} onChange={e => setNewProduct({...newProduct, productionDate: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5 tracking-widest">วันหมดอายุ</label>
-                    <input type="date" className="w-full p-3.5 bg-slate-50 border rounded-2xl text-sm font-bold outline-none text-black" value={newProduct.expirationDate || ''} onChange={e => setNewProduct({...newProduct, expirationDate: e.target.value})} />
-                  </div>
-                </div>
-                <div className="pt-4 space-y-3">
-                   <button onClick={handleAddProduct} className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-sm shadow-xl hover:translate-y-[-2px] transition-all">Create Product</button>
-                   <button onClick={() => setShowAddProductModal(false)} className="w-full py-4 border rounded-[2rem] font-black text-sm text-slate-400">Cancel</button>
-                </div>
-              </div>
-            </div>
+                      {historyOrders.length === 0 && (
+                        <tr>
+                          <td colSpan={9} className="p-20 text-center">
+                            <div className="flex flex-col items-center gap-4 opacity-30">
+                               <p className="text-6xl">📜</p>
+                               <p className="text-slate-400 font-black uppercase italic tracking-widest">ไม่พบประวัติการทำรายการ</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                   </tbody>
+                </table>
+             </div>
           </div>
         </div>
-      )}
+      );
+    }
 
-      {showReporterModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-           <div className="bg-white rounded-[2.5rem] w-full max-w-sm p-8 shadow-2xl animate-in slide-in-from-bottom-10">
-              <h3 className="text-xl font-black text-center mb-6 text-slate-800">Authorized Agent</h3>
-              <div className="p-4 bg-slate-50 border rounded-2xl text-sm font-black text-center text-slate-600 uppercase tracking-widest mb-8">
-                 {currentUser?.name}
+    const basePending = orders.filter(o => o.status === 'pending');
+    const pending = filteredOrdersBySearch(basePending);
+
+    return (
+      <div className="space-y-8 animate-in fade-in pb-20">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+           <div>
+              <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">ศูนย์จัดการคลังสินค้า (Warehouse Ops)</h2>
+              <button 
+                onClick={() => setWarehouseSubView('fulfillment_history')}
+                className="mt-4 px-8 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all flex items-center gap-3"
+              >
+                 📜 ดูประวัติการเบิก
+              </button>
+           </div>
+           
+           <div className="relative w-full md:w-96 group">
+              <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                 </svg>
               </div>
-              <div className="flex gap-3">
-                 <button onClick={() => setShowReporterModal(false)} className="flex-1 py-4 border rounded-3xl font-bold text-slate-400">Back</button>
-                 <button onClick={submitBatchOrders} className="flex-1 py-4 bg-blue-600 text-white rounded-3xl font-black shadow-xl shadow-blue-50">Submit Request</button>
-              </div>
+              <input 
+                type="text" 
+                placeholder="ค้นหารายการรอยืนยัน..." 
+                className="w-full pl-14 pr-5 py-5 bg-white border-2 border-slate-100 rounded-[2rem] text-sm font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 shadow-sm transition-all"
+                value={historySearchQuery}
+                onChange={(e) => setHistorySearchQuery(e.target.value)}
+              />
            </div>
         </div>
-      )}
-
-      {showAddStoreModal && (
-         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-            <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm animate-in zoom-in">
-               <h3 className="text-xl font-black mb-6 text-slate-800">Add Modern Trade Partner</h3>
-               <input type="text" placeholder="Store Name..." className="w-full p-4 bg-slate-50 border rounded-2xl mb-8 font-black text-sm outline-none text-black" id="newStoreInput" />
-               <div className="flex gap-3">
-                  <button onClick={() => setShowAddStoreModal(false)} className="flex-1 py-3.5 border rounded-3xl font-bold text-slate-400">Cancel</button>
-                  <button onClick={() => {
-                     const val = (document.getElementById('newStoreInput') as HTMLInputElement).value;
-                     if (val) setStores([...stores, {id: Date.now().toString(), name: val, subBranches: []}]);
-                     setShowAddStoreModal(false);
-                  }} className="flex-1 py-3.5 bg-slate-900 text-white rounded-3xl font-black">Add Partner</button>
+        
+        <div className="grid grid-cols-1 gap-8">
+          {pending.map((o, idx) => (
+            <div key={o.id} className="bg-white rounded-[2.5rem] border-2 border-slate-100 shadow-sm overflow-hidden animate-in slide-in-from-bottom-4 transition-all hover:border-blue-100 relative">
+               <div className="absolute top-6 left-[-1.5rem] rotate-[-45deg] bg-blue-600 text-white px-8 py-1 font-black text-[10px] shadow-lg z-10">#{idx + 1}</div>
+               <div className="p-6 pl-12 bg-slate-900 text-white flex justify-between items-center">
+                  <div>
+                    <h3 className="font-black text-lg italic tracking-tight uppercase">{o.poNumber}</h3>
+                    <p className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">ID: {o.id} | SOURCE: {o.source}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Target Location</p>
+                    <p className="font-black text-sm">{o.targetName || o.storeName || o.influencerName} {o.subBranch && `- ${o.subBranch}`}</p>
+                  </div>
+               </div>
+               
+               <div className="p-8">
+                  <div className="space-y-4">
+                     {o.items.map(item => (
+                       <div key={item.productId} className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group">
+                          <div className="flex items-center gap-4">
+                             <div className="w-12 h-12 bg-white rounded-xl border flex items-center justify-center text-xs font-black shadow-inner">
+                                {products.find(p => p.id === item.productId)?.sku.slice(-4) || 'SKU'}
+                             </div>
+                             <div>
+                                <p className="text-slate-900 font-black text-sm">{item.productName}</p>
+                                <p className="text-[10px] text-slate-400 font-bold">{item.sku}</p>
+                                {item.quantity !== item.originalQuantity && (
+                                   <p className="text-[9px] font-black uppercase text-amber-500">Original: {item.originalQuantity}</p>
+                                )}
+                             </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-4 bg-white p-2 rounded-xl border shadow-sm">
+                             <button 
+                                onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity - 1)}
+                                className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-red-50 hover:text-red-500 transition-colors"
+                             >
+                                -
+                             </button>
+                             <input 
+                                type="number" 
+                                className="w-16 text-center font-black text-lg bg-transparent outline-none"
+                                value={item.quantity}
+                                onChange={(e) => adjustWarehouseOrderQty(o.id, item.productId, parseInt(e.target.value) || 0)}
+                             />
+                             <button 
+                                onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity + 1)}
+                                className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
+                             >
+                                +
+                             </button>
+                          </div>
+                          
+                          <div className="text-right min-w-[100px]">
+                             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Subtotal</p>
+                             <p className="font-black text-slate-900 italic">฿{(item.quantity * item.unitPrice).toLocaleString()}</p>
+                          </div>
+                       </div>
+                     ))}
+                  </div>
+                  
+                  <div className="mt-8 flex flex-col md:flex-row justify-between items-center border-t pt-8 gap-6">
+                     <div className="flex items-center gap-4">
+                        <div className="text-left">
+                           <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Order Value</p>
+                           <p className="text-2xl font-black text-slate-900 italic">฿{o.totalValue.toLocaleString()}</p>
+                        </div>
+                     </div>
+                     <div className="flex gap-3">
+                        <button 
+                          onClick={() => setConfirmingOrder(o)}
+                          className="px-10 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
+                        >
+                           ✅ ตรวจสอบและยืนยันการเบิก
+                        </button>
+                        <button 
+                          onClick={() => updateOrderStatus(o.id, 'cancelled')}
+                          className="px-6 py-4 bg-red-100 text-red-600 rounded-2xl font-black hover:bg-red-200 transition-all"
+                        >
+                           ยกเลิก
+                        </button>
+                     </div>
+                  </div>
                </div>
             </div>
-         </div>
-      )}
+          ))}
+          
+          {pending.length === 0 && (
+            <div className="p-32 text-center bg-white rounded-[3rem] border-2 border-dashed border-slate-200">
+               <p className="text-6xl mb-6 grayscale opacity-20">📦</p>
+               <h3 className="text-2xl font-black text-slate-300 italic uppercase tracking-tighter">ไม่มีรายการรอยืนยันจากแผนกต่างๆ</h3>
+               {historySearchQuery && <button onClick={() => setHistorySearchQuery('')} className="mt-4 text-blue-500 font-bold hover:underline">ล้างการค้นหา</button>}
+            </div>
+          )}
+        </div>
+
+        {/* Dispatch Confirmation Modal */}
+        {confirmingOrder && (
+          <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-300">
+             <div className="w-full max-w-lg bg-white rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+                <div className="p-8 bg-slate-900 text-white text-center">
+                   <h2 className="text-2xl font-black italic tracking-tighter uppercase mb-2">ยืนยันการปล่อยสินค้า</h2>
+                   <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.2em]">Warehouse Authorization Required</p>
+                </div>
+                
+                <div className="p-10 space-y-6">
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">ผู้ทำรายการ (Confirmed By)</label>
+                      <select 
+                        className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black outline-none focus:border-blue-500 appearance-none"
+                        value={warehouseAuth.userId}
+                        onChange={(e) => setWarehouseAuth({ ...warehouseAuth, userId: e.target.value })}
+                      >
+                         <option value="">เลือกพนักงาน...</option>
+                         {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+                      </select>
+                   </div>
+                   
+                   <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">รหัสผ่านยืนยัน (Staff Password)</label>
+                      <input 
+                        type="password" 
+                        placeholder="••••••••"
+                        className="w-full p-5 bg-slate-50 border-2 border-slate-100 rounded-2xl font-black outline-none focus:border-blue-500"
+                        value={warehouseAuth.password}
+                        onChange={(e) => setWarehouseAuth({ ...warehouseAuth, password: e.target.value })}
+                      />
+                   </div>
+                   
+                   <div className="pt-4 grid grid-cols-2 gap-4">
+                      <button 
+                        onClick={() => {
+                           const user = users.find(u => u.id === warehouseAuth.userId);
+                           if (!user || user.password !== warehouseAuth.password) {
+                              alert("ข้อมูลยืนยันไม่ถูกต้อง กรุณาตรวจสอบพนักงานและรหัสผ่าน");
+                              return;
+                           }
+                           updateOrderStatus(confirmingOrder.id, 'confirmed', user.name);
+                           setConfirmingOrder(null);
+                           setWarehouseAuth({ userId: '', password: '' });
+                        }}
+                        className="py-5 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-100 hover:scale-105 active:scale-95 transition-all"
+                      >
+                        ยืนยันการเบิก
+                      </button>
+                      <button 
+                        onClick={() => {
+                           setConfirmingOrder(null);
+                           setWarehouseAuth({ userId: '', password: '' });
+                        }}
+                        className="py-5 bg-slate-100 text-slate-400 rounded-2xl font-black hover:bg-slate-200 transition-all"
+                      >
+                        ยกเลิก
+                      </button>
+                   </div>
+                </div>
+             </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderShipmentTracker = () => (
+    <div className="space-y-8 animate-in fade-in">
+       <div className="flex justify-between items-center">
+          <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">Shipment Tracker</h2>
+          <p className="text-slate-400 text-sm font-bold uppercase tracking-widest">Real-time status of outgoing orders</p>
+       </div>
+       
+       <div className="grid grid-cols-1 gap-6">
+          {orders.filter(o => o.status === 'confirmed').map(o => {
+            const isSelected = selectedTrackingOrderId === o.id;
+            return (
+              <div 
+                key={o.id} 
+                onClick={() => {
+                   if (!isSelected) {
+                     setSelectedTrackingOrderId(o.id);
+                     setTempTrackingNumber(o.trackingNumber || '');
+                   }
+                }}
+                className={`bg-white p-6 rounded-[2.5rem] border-2 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center group transition-all cursor-pointer ${isSelected ? 'border-pink-500 ring-4 ring-pink-50 shadow-xl' : 'border-transparent hover:border-blue-200'}`}
+              >
+                 <div className="flex items-center gap-6 w-full md:w-auto">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shadow-inner border transition-all ${o.trackingNumber ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}>
+                       {o.trackingNumber ? '📦' : '🚚'}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{o.poNumber}</p>
+                        <span className="text-[9px] bg-slate-100 px-2 py-0.5 rounded text-slate-500 font-bold uppercase">{o.source}</span>
+                      </div>
+                      <h4 className="text-lg font-black text-slate-800">{o.storeName || o.influencerName || o.recipientName} - {o.subBranch || 'สำนักงานใหญ่'}</h4>
+                      <div className="flex items-center gap-4 mt-1">
+                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight">Confirmed: {new Date(o.processedAt || '').toLocaleString('th-TH')}</p>
+                         {o.trackingNumber && <p className="text-[10px] text-emerald-600 font-black uppercase tracking-widest bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100">Tracking: {o.trackingNumber}</p>}
+                      </div>
+                    </div>
+                 </div>
+
+                 <div className="mt-4 md:mt-0 w-full md:w-auto text-right">
+                    {isSelected ? (
+                       <div className="flex items-center gap-2 animate-in slide-in-from-right-4 duration-300" onClick={e => e.stopPropagation()}>
+                          <input 
+                            autoFocus
+                            type="text" 
+                            placeholder="ใส่เลขพัสดุ (Tracking No.)" 
+                            className="p-3 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-black outline-none focus:border-pink-500 w-48 md:w-64"
+                            value={tempTrackingNumber}
+                            onChange={e => setTempTrackingNumber(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && saveTrackingNumber(o.id)}
+                          />
+                          <button 
+                            onClick={() => saveTrackingNumber(o.id)}
+                            className="px-6 py-3 bg-slate-900 text-white rounded-xl text-xs font-black hover:scale-105 transition-all shadow-lg"
+                          >
+                             บันทึก
+                          </button>
+                          <button 
+                            onClick={() => setSelectedTrackingOrderId(null)}
+                            className="px-4 py-3 bg-slate-100 text-slate-400 rounded-xl text-xs font-black hover:bg-slate-200 transition-all"
+                          >
+                             ✕
+                          </button>
+                       </div>
+                    ) : (
+                       <div className="flex flex-col items-end gap-2">
+                          <span className={`px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg ${o.trackingNumber ? 'bg-emerald-600 text-white shadow-emerald-100' : 'bg-blue-600 text-white shadow-blue-100'}`}>
+                             {o.trackingNumber ? 'In Transit' : 'Out for delivery'}
+                          </span>
+                          <p className="text-[10px] text-slate-400 font-bold italic">คลิกที่รายการเพื่อใส่เลขพัสดุ</p>
+                       </div>
+                    )}
+                 </div>
+              </div>
+            );
+          })}
+          {orders.filter(o => o.status === 'confirmed').length === 0 && (
+             <div className="p-20 text-center bg-white rounded-[3rem] border border-dashed border-slate-200">
+                <p className="text-5xl mb-4 opacity-50">🚚</p>
+                <p className="text-slate-300 font-black uppercase tracking-widest italic">ยังไม่มีรายการที่กำลังจัดส่ง</p>
+             </div>
+          )}
+       </div>
+    </div>
+  );
+
+  const renderSettings = () => (
+    <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 pb-20 max-w-6xl mx-auto">
+      <div className="flex justify-between items-end border-b pb-6">
+        <div>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">System Settings & Configuration</h2>
+          <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mt-1">Manage users, stores, and global appearance</p>
+        </div>
+        <button onClick={handleResetSettings} className="px-6 py-3 bg-red-50 text-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-red-100 hover:bg-red-100 transition-all">
+          ⚠️ Factory Reset System
+        </button>
+      </div>
+
+      {/* Access Policies */}
+      <section className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center text-2xl">🛡️</div>
+          <div>
+            <h3 className="text-xl font-black text-slate-800">Global Access Policies</h3>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Email Sign-up & Permissions</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
+              <div>
+                <p className="font-black text-slate-800 text-sm">Allow Public Email Sign-up</p>
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Users can register accounts via email</p>
+              </div>
+              <button onClick={() => setAllowRegistration(!allowRegistration)} className={`w-14 h-8 rounded-full transition-all relative ${allowRegistration ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                 <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${allowRegistration ? 'left-7' : 'left-1'}`}></div>
+              </button>
+           </div>
+           <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
+              <div>
+                <p className="font-black text-slate-800 text-sm">Admin Approval Required</p>
+                <p className="text-[10px] text-slate-400 font-bold uppercase">New accounts must be enabled by an admin</p>
+              </div>
+              <button onClick={() => setRequireApproval(!requireApproval)} className={`w-14 h-8 rounded-full transition-all relative ${requireApproval ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                 <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${requireApproval ? 'left-7' : 'left-1'}`}></div>
+              </button>
+           </div>
+        </div>
+      </section>
+
+      {/* User Management Section */}
+      <section className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl">👤</div>
+          <div>
+            <h3 className="text-xl font-black text-slate-800">Account & Permission Management</h3>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Granular Role Assignment</p>
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1 space-y-4 bg-slate-50 p-8 rounded-[2rem] border border-slate-100">
+             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Create New Account</h4>
+             <div className="space-y-3">
+                <input type="text" placeholder="Full Name" className="w-full p-3 bg-white border rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" value={newUserName} onChange={e => setNewUserName(e.target.value)} />
+                <input type="email" placeholder="Email Address" className="w-full p-3 bg-white border rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" value={newUserEmail} onChange={e => setNewUserEmail(e.target.value)} />
+                <input type="password" placeholder="Password" className="w-full p-3 bg-white border rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" value={newUserPassword} onChange={e => setNewUserPassword(e.target.value)} />
+                <button onClick={handleAddUser} className="w-full py-3 bg-indigo-600 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-100 hover:scale-105 transition-all mt-2">Create User</button>
+             </div>
+          </div>
+          <div className="lg:col-span-2 overflow-x-auto">
+             <table className="w-full text-left font-bold text-sm">
+                <thead>
+                   <tr className="text-[10px] text-slate-400 uppercase tracking-widest border-b">
+                      <th className="pb-4">User</th>
+                      <th className="pb-4 text-center">Modules Allowed</th>
+                      <th className="pb-4 text-right">Actions</th>
+                   </tr>
+                </thead>
+                <tbody className="divide-y">
+                   {users.map(u => (
+                     <React.Fragment key={u.id}>
+                       <tr className="hover:bg-slate-50/50">
+                          <td className="py-4">
+                             <p className="text-slate-900 font-black">{u.name}</p>
+                             <p className="text-[10px] text-slate-400">{u.email}</p>
+                          </td>
+                          <td className="py-4 text-center">
+                             <div className="flex flex-wrap justify-center gap-1">
+                                {u.allowedViews.length === ALL_VIEWS.length ? <span className="bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded text-[8px]">FULL ACCESS</span> : <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[8px]">{u.allowedViews.length} MODULES</span>}
+                             </div>
+                          </td>
+                          <td className="py-4 text-right">
+                             <button onClick={() => setEditingUserId(editingUserId === u.id ? null : u.id)} className="text-xs font-black text-indigo-600 hover:underline mr-4">Edit Permissions</button>
+                             <button onClick={() => setUsers(users.filter(usr => usr.id !== u.id))} className="text-red-300 hover:text-red-500 transition-colors">🗑️</button>
+                          </td>
+                       </tr>
+                       {editingUserId === u.id && (
+                         <tr>
+                            <td colSpan={3} className="p-8 bg-indigo-50/30 rounded-2xl animate-in slide-in-from-top-2">
+                               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                  <div className="space-y-4">
+                                     <h5 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Functional Access</h5>
+                                     <div className="grid grid-cols-2 gap-2">
+                                        {[
+                                          { id: 'canManageAccounts', label: 'Manage Accounts' },
+                                          { id: 'canCreateProducts', label: 'Create Products' },
+                                          { id: 'canAdjustStock', label: 'Adjust Stock Manually' }
+                                        ].map(perm => (
+                                          <label key={perm.id} className="flex items-center gap-2 p-3 bg-white rounded-xl border cursor-pointer hover:border-indigo-300">
+                                             <input type="checkbox" checked={u[perm.id as keyof UserAccount] as boolean} onChange={() => toggleUserPermission(u.id, perm.id as keyof UserAccount)} />
+                                             <span className="text-[11px] font-bold text-slate-600">{perm.label}</span>
+                                          </label>
+                                        ))}
+                                     </div>
+                                  </div>
+                                  <div className="space-y-4">
+                                     <h5 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">View Access</h5>
+                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                        {ALL_VIEWS.map(v => (
+                                          <label key={v} className="flex items-center gap-2 p-2 bg-white rounded-lg border cursor-pointer hover:border-indigo-300">
+                                             <input type="checkbox" checked={u.allowedViews.includes(v)} onChange={() => toggleUserView(u.id, v)} />
+                                             <span className="text-[9px] font-bold text-slate-500 truncate">{v.replace('_DEP', '')}</span>
+                                          </label>
+                                        ))}
+                                     </div>
+                                  </div>
+                               </div>
+                            </td>
+                         </tr>
+                       )}
+                     </React.Fragment>
+                   ))}
+                </tbody>
+             </table>
+          </div>
+        </div>
+      </section>
+
+      {/* Store & Branch Management Section */}
+      <section className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-pink-50 text-pink-600 rounded-2xl flex items-center justify-center text-2xl">🏪</div>
+          <div>
+            <h3 className="text-xl font-black text-slate-800">Storefront & Branches</h3>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Modern Trade Locations</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+           <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col justify-center items-center gap-4 border-dashed">
+              <input type="text" placeholder="Store Name (e.g. Watson)" className="w-full p-4 bg-white border-2 border-slate-200 rounded-2xl text-xs font-black outline-none focus:border-pink-500" value={newStoreName} onChange={e => setNewStoreName(e.target.value)} />
+              <button onClick={handleAddStore} className="w-full py-4 bg-pink-500 text-white rounded-2xl font-black text-xs shadow-xl shadow-pink-100 hover:scale-105 transition-all">+ Add Main Store</button>
+           </div>
+           
+           {stores.map(s => (
+             <div key={s.id} className="bg-white p-6 rounded-[2rem] border-2 border-slate-100 shadow-sm space-y-4 group hover:border-pink-200 transition-all">
+                <div className="flex justify-between items-center">
+                   <h4 className="font-black text-slate-800 italic uppercase">{s.name}</h4>
+                   <button onClick={() => setStores(stores.filter(st => st.id !== s.id))} className="text-[10px] text-slate-300 hover:text-red-400">Remove</button>
+                </div>
+                <div className="space-y-2">
+                   {s.subBranches?.map((b, idx) => (
+                     <div key={idx} className="flex justify-between items-center bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 group/item">
+                        <span className="text-[10px] font-bold text-slate-500">{b}</span>
+                        <button onClick={() => {
+                          const updated = stores.map(st => st.id === s.id ? { ...st, subBranches: st.subBranches?.filter((_, i) => i !== idx) } : st);
+                          setStores(updated);
+                        }} className="text-[8px] text-slate-300 opacity-0 group-hover/item:opacity-100 transition-opacity">✕</button>
+                     </div>
+                   ))}
+                </div>
+                <div className="pt-2 border-t">
+                   <input 
+                     type="text" 
+                     placeholder="+ Add Branch" 
+                     className="w-full p-2 text-[10px] font-bold outline-none border rounded bg-slate-50 focus:bg-white"
+                     onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          handleAddBranch(s.id, (e.target as HTMLInputElement).value);
+                          (e.target as HTMLInputElement).value = '';
+                        }
+                     }}
+                   />
+                </div>
+             </div>
+           ))}
+        </div>
+      </section>
+
+      {/* Login Screen Customization */}
+      <section className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-8">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl">🖼️</div>
+          <div>
+            <h3 className="text-xl font-black text-slate-800">Customization</h3>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Login Screen & UI Theming</p>
+          </div>
+        </div>
+        
+        <div className="space-y-4">
+           <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Login Wallpaper URL</label>
+              <div className="flex gap-4">
+                 <input 
+                   type="text" 
+                   placeholder="https://images.unsplash.com/..." 
+                   className="flex-1 p-4 bg-slate-50 border-none rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                   value={loginWallpaper}
+                   onChange={e => setLoginWallpaper(e.target.value)}
+                 />
+                 <button onClick={() => setLoginWallpaper('')} className="px-6 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black text-xs hover:bg-slate-200 transition-all">Clear</button>
+              </div>
+              <p className="text-[10px] text-slate-400 italic">Leave empty to use the default dynamic blur theme.</p>
+           </div>
+           
+           <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center gap-2">
+              <p className="text-[10px] font-black text-slate-400 uppercase">Simulate Local Upload</p>
+              <input 
+                type="file" 
+                accept="image/*"
+                className="hidden" 
+                id="wallpaper-upload"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => setLoginWallpaper(reader.result as string);
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+              <label htmlFor="wallpaper-upload" className="px-6 py-2 bg-white border rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-100">Browse Files...</label>
+           </div>
+        </div>
+        
+        {loginWallpaper && (
+           <div className="w-full aspect-video rounded-[2rem] overflow-hidden border-8 border-slate-50 shadow-inner group relative">
+              <img src={loginWallpaper} className="w-full h-full object-cover" alt="Wallpaper Preview" />
+              <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
+                 <p className="text-white font-black text-sm italic tracking-widest">LOGIN SCREEN PREVIEW</p>
+              </div>
+           </div>
+        )}
+      </section>
+    </div>
+  );
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 overflow-hidden relative">
+        {loginWallpaper ? (
+          <img src={loginWallpaper} className="absolute inset-0 w-full h-full object-cover opacity-60 pointer-events-none scale-105 animate-pulse-slow" alt="" />
+        ) : (
+          <div className="absolute inset-0 opacity-20 pointer-events-none">
+            <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-pink-500 rounded-full blur-[120px]"></div>
+            <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[120px]"></div>
+          </div>
+        )}
+        
+        <form onSubmit={handleLogin} className="w-full max-md:max-w-md bg-white/10 backdrop-blur-xl p-10 rounded-[3rem] border border-white/20 shadow-2xl space-y-8 animate-in zoom-in-95 duration-500 relative z-10 mx-auto">
+          <div className="text-center">
+            <h1 className="text-5xl font-black text-white italic tracking-tighter mb-2">LAGLACE</h1>
+            <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] ml-1">Master Inventory Access</p>
+          </div>
+          <div className="space-y-4">
+            <input type="email" placeholder="EMAIL ADDRESS" className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 transition-all font-bold placeholder:text-slate-600" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+            <div className="relative">
+              <input type={showPassword ? "text" : "password"} placeholder="PASSWORD" className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 transition-all font-bold placeholder:text-slate-600" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-5 top-5 text-slate-500">{showPassword ? '🙈' : '👁️'}</button>
+            </div>
+          </div>
+          {loginError && <p className="text-red-400 text-xs text-center font-bold bg-red-400/10 py-3 rounded-2xl border border-red-400/20">{loginError}</p>}
+          <button type="submit" className="w-full py-5 bg-white text-slate-900 rounded-2xl font-black hover:bg-blue-600 hover:text-white transition-all shadow-xl active:scale-95">AUTHORIZE ACCESS</button>
+          
+          {allowRegistration && (
+             <p className="text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
+                No account? <button type="button" className="text-blue-400 hover:underline">Contact Admin to Request Access</button>
+             </p>
+          )}
+        </form>
+      </div>
+    );
+  }
+
+  const isOperationView = [View.PURCHASING, View.INFLUENCER_DEP, View.LIVE_DEP, View.AFFILIATE_DEP, View.BUFFER_DEP].includes(activeView);
+
+  return (
+    <Layout activeView={activeView} setActiveView={setActiveView} currentUser={currentUser!} onLogout={() => setIsLoggedIn(false)} orders={orders}>
+      <div className="pb-20">
+        {activeView === View.DASHBOARD && <Dashboard orders={orders} products={products} stores={stores} influencers={influencers} users={users} setActiveView={setActiveView} />}
+        {isOperationView && renderOperationModule()}
+        {activeView === View.INVENTORY && renderInventory()}
+        {activeView === View.WAREHOUSE && renderWarehouse()}
+        {activeView === View.AI_CHAT && <AiChat products={products} orders={orders} />}
+        {activeView === View.EXPORT && <ExportReports orders={orders} products={products} stores={stores} influencers={influencers} users={users} />}
+        {activeView === View.NEWS_ANNOUNCEMENT && <NewsAnnouncement announcements={announcements} setAnnouncements={setAnnouncements} currentUser={currentUser!} />}
+        {activeView === View.SHIPMENTS && renderShipmentTracker()}
+        {activeView === View.SETTINGS && renderSettings()}
+      </div>
 
       {notification && (
         <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] bg-slate-900/95 backdrop-blur-sm text-white px-8 py-4 rounded-3xl font-black text-xs shadow-2xl animate-in slide-in-from-bottom-8 flex items-center gap-3">

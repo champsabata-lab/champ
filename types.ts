@@ -27,6 +27,16 @@ export interface UserAccount {
   allowedViews: View[];
 }
 
+export interface Announcement {
+  id: number;
+  title: string;
+  detail: string;
+  icon: string;
+  image?: string;
+  color: string;
+  updatedAt: string;
+}
+
 export interface Product {
   id: string;
   sku: string;
@@ -43,8 +53,9 @@ export interface Product {
     w: number;
     h: number;
   };
-  productionDate?: string;
-  expirationDate?: string;
+  mfd?: string;
+  exp?: string;
+  lotNumber?: string;
   unitPrice: number;
   leadTime: string;
   stockPurchasing: number;
@@ -55,18 +66,28 @@ export interface Product {
   stockBuffer: number;
 }
 
+export interface OrderItem {
+  productId: string;
+  productName: string;
+  sku: string;
+  quantity: number;
+  originalQuantity: number;
+  unitPrice: number;
+  stockAtTime?: number;
+}
+
 export interface Order {
   id: string;
+  poNumber: string;
   source: OrderSource;
   storeName?: string;
   subBranch?: string;
   influencerName?: string;
-  firstName?: string;
-  lastName?: string;
-  productId: string;
-  productName: string;
-  requestedQuantity: number;
-  quantity: number;
+  targetName?: string;
+  recipientName?: string;
+  recipientAddress?: string;
+  items: OrderItem[];
+  totalValue: number;
   status: OrderStatus;
   requestedAt: string;
   processedAt?: string;
