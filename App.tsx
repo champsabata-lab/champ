@@ -1833,7 +1833,7 @@ const App: React.FC = () => {
                 </div>
                 <div className="pt-4 space-y-3">
                    <button onClick={handleAddProduct} className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black text-sm shadow-xl hover:translate-y-[-2px] transition-all">Create Product</button>
-                   <button onClick={() => setShowAddProductModal(false)} className="w-full py-4 border rounded-[2rem] font-black text-sm text-slate-400">Abort</button>
+                   <button onClick={() => setShowAddProductModal(false)} className="w-full py-4 border rounded-[2rem] font-black text-sm text-slate-400">Cancel</button>
                 </div>
               </div>
             </div>
