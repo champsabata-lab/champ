@@ -1,0 +1,7 @@
+{
+  "name": "LAGLACE Stock Manager",
+  "description": "A collaborative stock management platform for Purchasing and Warehouse departments to handle Modern Trade orders effectively.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
