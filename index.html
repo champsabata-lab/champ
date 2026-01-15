@@ -1,33 +1,472 @@
-
 <!DOCTYPE html>
 <html lang="th">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LAGLACE Stock Manager</title>
+    
+    <!-- Dependencies via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Custom Fonts & Styles -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Prompt', sans-serif;
-        }
+        body { font-family: 'Prompt', sans-serif; }
+        .animate-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .sidebar-active { background: #2563eb; color: white; box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.2); }
     </style>
-<script type="importmap">
+
+    <!-- Gemini API Module -->
+    <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
     "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "react": "https://esm.sh/react@^19.2.3",
+    "react/": "https://esm.sh/react@^19.2.3/",
     "recharts": "https://esm.sh/recharts@^3.6.0",
-    "xlsx": "https://esm.sh/xlsx@0.18.5",
-    "jspdf": "https://esm.sh/jspdf@2.5.1",
-    "jspdf-autotable": "https://esm.sh/jspdf-autotable@3.5.25"
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "jspdf": "https://esm.sh/jspdf@^4.0.0",
+    "jspdf-autotable": "https://esm.sh/jspdf-autotable@^5.0.7",
+    "xlsx": "https://esm.sh/xlsx@^0.18.5"
   }
 }
 </script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { GoogleGenAI, Type } from "@google/genai";
+
+        // --- Constants & Mock Data ---
+        const PRODUCT_CATEGORIES = [
+            'เครื่องสำอาง (Makeup)', 'สกินแคร์ (Skincare)', 'อุปกรณ์ (Accessories)',
+            'น้ำหอม (Fragrance)', 'ของสมนาคุณ (Premiums)', 'อื่นๆ (Others)'
+        ];
+
+        const INITIAL_STORES = [
+            { id: 'S1', name: '7-Eleven', subBranches: ['บางนา', 'ลาดพร้าว', 'สยาม'] },
+            { id: 'S2', name: 'Lotus\'s Go Fresh', subBranches: ['บางนา', 'พระราม 2'] }
+        ];
+
+        const INITIAL_INFLUENCERS = [
+            { id: 'IF1', name: 'คุณมานี Channel' }, { id: 'IF2', name: 'รีวิวของกิน 4.0' }
+        ];
+
+        // --- Main App Component ---
+        const App = () => {
+            const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+            const [currentUser, setCurrentUser] = React.useState(null);
+            const [activeView, setActiveView] = React.useState('DASHBOARD');
+            const [products, setProducts] = React.useState([]);
+            const [orders, setOrders] = React.useState([]);
+            const [announcements, setAnnouncements] = React.useState([]);
+            const [stores, setStores] = React.useState(INITIAL_STORES);
+            const [notification, setNotification] = React.useState(null);
+
+            // Sub-navigation state
+            const [isNewsExpanded, setIsNewsExpanded] = React.useState(true);
+            const [subView, setSubView] = React.useState('history'); // history | create | details
+            const [selectedOrderId, setSelectedOrderId] = React.useState(null);
+            const [inventorySubView, setInventorySubView] = React.useState('manage'); // manage | add
+            const [editingProduct, setEditingProduct] = React.useState(null);
+            const [searchQuery, setSearchQuery] = React.useState('');
+
+            // Initialization
+            React.useEffect(() => {
+                const saved = localStorage.getItem('laglace_master_v17');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    setProducts(data.products || []);
+                    setOrders(data.orders || []);
+                    setAnnouncements(data.announcements || []);
+                } else {
+                    // Default Data if empty
+                    setProducts([
+                        { 
+                            id: 'P001', sku: '845125118', name: 'น้ำเปล่า', unit: 'แพ็ค', category: 'อื่นๆ (Others)',
+                            unitPrice: 10, stockPurchasing: 30, stockContent: 250, stockInfluencer: 750, stockLive: 300, stockAffiliate: 200, stockBuffer: 1000,
+                            lotNumber: 'L2401', mfd: '2024-01-01', exp: '2025-01-01', images: ['https://images.unsplash.com/photo-1523362628744-0c100150b504?w=300']
+                        }
+                    ]);
+                    setAnnouncements([
+                        { id: 1, title: 'ข้อควรระวัง MFG/EXP', icon: '⚠️', detail: 'กรุณาตรวจสอบวันที่ผลิตและวันหมดอายุก่อนบรรจุลงกล่องทุกครั้ง...', color: 'red', updatedAt: new Date().toISOString() },
+                        { id: 2, title: 'กฎการส่งหน้าร้านต่างๆ', icon: '📝', detail: 'ระเบียบการจัดส่งห้างสรรพสินค้า...', color: 'blue', updatedAt: new Date().toISOString() }
+                    ]);
+                }
+            }, []);
+
+            React.useEffect(() => {
+                localStorage.setItem('laglace_master_v17', JSON.stringify({ products, orders, announcements }));
+            }, [products, orders, announcements]);
+
+            const notify = (msg) => {
+                setNotification(msg);
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                setIsLoggedIn(true);
+                setCurrentUser({ name: 'คุณประเสริฐ (Admin)', role: 'Warehouse', email: 'admin@laglace.com' });
+            };
+
+            // Shared Layout View Wrapper
+            const ViewWrapper = ({ title, children, actions }) => (
+                <div className="animate-in space-y-8 pb-20">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
+                        <div>
+                            <h1 className="text-3xl font-black text-slate-800 italic tracking-tighter">{title}</h1>
+                            <p className="text-slate-400 text-sm font-bold uppercase tracking-widest mt-1">Management Portal v1.7</p>
+                        </div>
+                        <div className="flex gap-3">{actions}</div>
+                    </div>
+                    {children}
+                </div>
+            );
+
+            // --- Dashboard Component ---
+            const DashboardView = () => {
+                const canvasRef1 = React.useRef(null);
+                const canvasRef2 = React.useRef(null);
+
+                React.useEffect(() => {
+                    const ctx1 = canvasRef1.current?.getContext('2d');
+                    const ctx2 = canvasRef2.current?.getContext('2d');
+                    if (ctx1) {
+                        new Chart(ctx1, {
+                            type: 'doughnut',
+                            data: {
+                                labels: PRODUCT_CATEGORIES,
+                                datasets: [{ data: [30, 20, 15, 10, 5, 20], backgroundColor: ['#ec4899', '#3b82f6', '#10b981', '#f59e0b', '#6366f1', '#94a3b8'] }]
+                            },
+                            options: { plugins: { legend: { position: 'bottom' } } }
+                        });
+                    }
+                    if (ctx2) {
+                        new Chart(ctx2, {
+                            type: 'bar',
+                            data: {
+                                labels: products.slice(0, 5).map(p => p.name),
+                                datasets: [{ label: 'Stock Levels', data: products.slice(0, 5).map(p => p.stockBuffer), backgroundColor: '#3b82f6', borderRadius: 12 }]
+                            },
+                            options: { scales: { y: { beginAtZero: true } } }
+                        });
+                    }
+                }, []);
+
+                return (
+                    <ViewWrapper title="Dashboard Analytics">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            {[
+                                { label: 'Inventory Value', val: '฿12.4M', color: 'pink' },
+                                { label: 'Pending Orders', val: orders.filter(o => o.status === 'pending').length, color: 'amber' },
+                                { label: 'Confirmed Today', val: '42', color: 'blue' },
+                                { label: 'Low Stock Alert', val: '3', color: 'red' }
+                            ].map((stat, i) => (
+                                <div key={i} className="bg-white p-6 rounded-[2rem] border shadow-sm">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
+                                    <p={`text-3xl font-black text-${stat.color}-500 tracking-tighter`}>{stat.val}</p>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                            <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><canvas ref={canvasRef1}></canvas></div>
+                            <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm"><canvas ref={canvasRef2}></canvas></div>
+                        </div>
+                    </ViewWrapper>
+                );
+            };
+
+            // --- Inventory Module ---
+            const InventoryView = () => {
+                const [form, setForm] = React.useState({ 
+                    name: '', sku: '', category: PRODUCT_CATEGORIES[0], unit: 'ชิ้น', 
+                    unitPrice: 0, lotNumber: '', mfd: '', exp: '', stockBuffer: 0,
+                    stockPurchasing: 0, stockContent: 0, stockInfluencer: 0, stockLive: 0, stockAffiliate: 0
+                });
+
+                const handleSave = (e) => {
+                    e.preventDefault();
+                    const newProd = { ...form, id: editingProduct ? editingProduct.id : 'P'+Date.now(), images: ['https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?w=300'] };
+                    if (editingProduct) {
+                        setProducts(products.map(p => p.id === editingProduct.id ? newProd : p));
+                    } else {
+                        setProducts([...products, newProd]);
+                    }
+                    setInventorySubView('manage');
+                    notify('Product information synchronized.');
+                };
+
+                if (inventorySubView === 'add') {
+                    return (
+                        <ViewWrapper title={editingProduct ? "Edit Product" : "Add New Product"}>
+                            <form onSubmit={handleSave} className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-10 max-w-4xl mx-auto">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="space-y-4">
+                                        <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Name</label><input required className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none focus:ring-2 focus:ring-blue-500" value={form.name} onChange={e => setForm({...form, name: e.target.value})} /></div>
+                                        <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">SKU</label><input required className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none focus:ring-2 focus:ring-blue-500" value={form.sku} onChange={e => setForm({...form, sku: e.target.value})} /></div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Category</label>
+                                                <select className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none" value={form.category} onChange={e => setForm({...form, category: e.target.value})}>
+                                                    {PRODUCT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Unit</label><input required className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none" value={form.unit} onChange={e => setForm({...form, unit: e.target.value})} /></div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">MFD</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none" value={form.mfd} onChange={e => setForm({...form, mfd: e.target.value})} /></div>
+                                            <div><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">EXP</label><input type="date" className="w-full p-4 bg-slate-50 rounded-2xl font-black outline-none" value={form.exp} onChange={e => setForm({...form, exp: e.target.value})} /></div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-900 p-8 rounded-[2.5rem] text-white space-y-6">
+                                        <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Stock Allotment</h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            {['stockPurchasing', 'stockInfluencer', 'stockBuffer'].map(key => (
+                                                <div key={key}><label className="text-[8px] font-black text-slate-500 uppercase">{key.replace('stock', '')}</label><input type="number" className="w-full p-2 bg-white/10 rounded-xl text-white font-black outline-none" value={form[key]} onChange={e => setForm({...form, [key]: Number(e.target.value)})} /></div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex justify-end pt-8"><button type="submit" className="px-12 py-5 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:scale-105 transition-all">Confirm Stock Entry</button></div>
+                            </form>
+                        </ViewWrapper>
+                    );
+                }
+
+                return (
+                    <ViewWrapper title="Master Inventory" actions={<button onClick={() => setInventorySubView('add')} className="px-8 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all">+ Add Product</button>}>
+                        <div className="bg-white rounded-[3rem] border shadow-sm overflow-hidden">
+                            <table className="w-full text-left font-bold">
+                                <thead className="bg-slate-900 text-slate-400 text-[9px] uppercase tracking-widest">
+                                    <tr>
+                                        <th className="p-6">Product / SKU</th>
+                                        <th className="p-6">Category</th>
+                                        <th className="p-6 bg-slate-800 text-blue-300">Purchasing</th>
+                                        <th className="p-6 text-pink-300">Influencer</th>
+                                        <th className="p-6 bg-slate-800 text-emerald-300">Buffer</th>
+                                        <th className="p-6">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y text-xs">
+                                    {products.map(p => (
+                                        <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                                            <td className="p-6 flex items-center gap-4">
+                                                <img src={p.images[0]} className="w-12 h-12 rounded-xl object-cover border" />
+                                                <div><p className="text-slate-900 font-black">{p.name}</p><p className="text-[10px] text-slate-300">{p.sku}</p></div>
+                                            </td>
+                                            <td className="p-6"><span className="bg-slate-100 px-2 py-1 rounded text-[8px]">{p.category.split(' ')[0]}</span></td>
+                                            <td className="p-6 text-center font-black text-lg bg-slate-50/50">{p.stockPurchasing}</td>
+                                            <td className="p-6 text-center font-black text-lg">{p.stockInfluencer}</td>
+                                            <td className="p-6 text-center font-black text-lg text-emerald-600 bg-slate-50/50">{p.stockBuffer}</td>
+                                            <td className="p-6"><button onClick={() => {setEditingProduct(p); setForm(p); setInventorySubView('add');}} className="text-blue-500">Edit</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </ViewWrapper>
+                );
+            };
+
+            // --- News Module ---
+            const NewsView = () => {
+                const [editingId, setEditingId] = React.useState(null);
+                const [editForm, setEditForm] = React.useState({});
+
+                const saveNews = () => {
+                    setAnnouncements(announcements.map(a => a.id === editingId ? { ...a, ...editForm, updatedAt: new Date().toISOString() } : a));
+                    setEditingId(null);
+                    notify('Announcement updated.');
+                };
+
+                return (
+                    <ViewWrapper title="News & Updates">
+                        <div className="grid gap-8 max-w-4xl mx-auto">
+                            {announcements.map(item => (
+                                <div key={item.id} className="bg-white p-8 rounded-[3rem] border-2 border-transparent hover:border-slate-100 shadow-sm relative group">
+                                    <div className="absolute top-8 right-8 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                        <button onClick={() => {setEditingId(item.id); setEditForm(item);}} className="w-8 h-8 bg-blue-50 text-blue-600 rounded-lg">✏️</button>
+                                    </div>
+                                    <div className="flex gap-8">
+                                        <div className={`w-20 h-20 rounded-[2rem] bg-${item.color}-50 flex items-center justify-center text-4xl shadow-inner border border-${item.color}-100`}>{item.icon}</div>
+                                        <div className="flex-1 space-y-4">
+                                            {editingId === item.id ? (
+                                                <div className="space-y-4">
+                                                    <input className="w-full p-4 bg-slate-50 rounded-xl font-black" value={editForm.title} onChange={e => setEditForm({...editForm, title: e.target.value})} />
+                                                    <textarea rows="4" className="w-full p-4 bg-slate-50 rounded-xl" value={editForm.detail} onChange={e => setEditForm({...editForm, detail: e.target.value})} />
+                                                    <div className="flex justify-end gap-2"><button onClick={() => setEditingId(null)} className="px-4 py-2 text-slate-400 font-bold">Cancel</button><button onClick={saveNews} className="px-6 py-2 bg-blue-600 text-white rounded-xl font-bold">Save</button></div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <h3 className="text-2xl font-black italic">{item.title}</h3>
+                                                    <div className="bg-slate-50/50 p-6 rounded-[2.5rem] border border-slate-100"><p className="text-slate-600 font-medium">{item.detail}</p></div>
+                                                    <p className="text-[10px] text-slate-300 italic">Updated: {new Date(item.updatedAt).toLocaleString('th-TH')}</p>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </ViewWrapper>
+                );
+            };
+
+            // --- Operational View ---
+            const OperationView = (view) => {
+                const [search, setSearch] = React.useState('');
+                if (subView === 'create') {
+                    return (
+                        <ViewWrapper title={`Create ${view} Entry`}>
+                            <div className="bg-white p-10 rounded-[3rem] border shadow-sm space-y-10 max-w-5xl mx-auto">
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Store / Brand</label><select className="w-full p-4 bg-slate-50 rounded-2xl outline-none appearance-none"><option>Select Store...</option>{stores.map(s => <option key={s.id}>{s.name}</option>)}</select></div>
+                                    <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Recipient Name</label><input placeholder="Full Name..." className="w-full p-4 bg-slate-50 rounded-2xl outline-none" /></div>
+                                    <div className="md:col-span-2 space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Recipient Address</label><input placeholder="Shipping Details..." className="w-full p-4 bg-slate-50 rounded-2xl outline-none" /></div>
+                                </div>
+                                <div className="space-y-4">
+                                    <input placeholder="Search products to add..." className="w-full md:w-64 p-3 bg-slate-100 rounded-xl text-xs font-bold outline-none border-2 border-transparent focus:border-blue-500" />
+                                    <div className="p-20 text-center text-slate-200 uppercase tracking-widest font-black italic">Select Products Above to Populate List</div>
+                                </div>
+                                <div className="flex justify-end gap-3"><button onClick={() => setSubView('history')} className="px-8 py-4 text-slate-400 font-bold">Cancel</button><button onClick={() => {setSubView('history'); notify('Order created successfully.');}} className="px-12 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl">Submit Entry</button></div>
+                            </div>
+                        </ViewWrapper>
+                    );
+                }
+
+                return (
+                    <ViewWrapper title={`${view} History`} actions={<button onClick={() => setSubView('create')} className="px-10 py-5 bg-slate-900 text-white rounded-3xl font-black shadow-xl hover:scale-105 transition-all">New Entry</button>}>
+                        <div className="bg-white p-10 rounded-[3rem] border shadow-sm overflow-hidden">
+                            <div className="p-20 text-center text-slate-300 font-black italic tracking-widest uppercase">No Transaction Data Found for Search Query</div>
+                        </div>
+                    </ViewWrapper>
+                );
+            };
+
+            // --- AI Chat Module ---
+            const AiChatView = () => {
+                const [input, setInput] = React.useState('');
+                const [chat, setChat] = React.useState([{ role: 'model', text: 'สวัสดีครับ! มีอะไรให้ LAGLACE AI ช่วยวิเคราะห์สต็อกในวันนี้ไหมครับ?' }]);
+                const [loading, setLoading] = React.useState(false);
+
+                const sendMsg = async (e) => {
+                    e.preventDefault();
+                    if (!input.trim() || loading) return;
+                    const uMsg = input; setInput(''); setChat([...chat, { role: 'user', text: uMsg }]); setLoading(true);
+                    try {
+                        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                        const model = ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: uMsg });
+                        const res = await model;
+                        setChat(prev => [...prev, { role: 'model', text: res.text || 'Cannot process request.' }]);
+                    } catch (err) { setChat(prev => [...prev, { role: 'model', text: 'Error connecting to AI service.' }]); }
+                    finally { setLoading(false); }
+                };
+
+                return (
+                    <ViewWrapper title="Talks with AI">
+                        <div className="flex flex-col h-[600px] max-w-4xl mx-auto bg-white rounded-[2.5rem] border shadow-sm overflow-hidden">
+                            <div className="flex-1 overflow-y-auto p-8 space-y-4 bg-slate-50/50">
+                                {chat.map((m, i) => (
+                                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`max-w-[80%] p-5 rounded-[2rem] text-sm font-medium shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white text-slate-700 rounded-tl-none border'}`}>{m.text}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <form onSubmit={sendMsg} className="p-6 border-t bg-white flex gap-2">
+                                <input className="flex-1 p-4 bg-slate-50 border-none rounded-2xl outline-none font-bold" placeholder="Ask AI about stock risk or sales patterns..." value={input} onChange={e => setInput(e.target.value)} />
+                                <button className="px-8 bg-indigo-600 text-white rounded-2xl font-black">Ask</button>
+                            </form>
+                        </div>
+                    </ViewWrapper>
+                );
+            };
+
+            if (!isLoggedIn) {
+                return (
+                    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
+                        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-pink-500 rounded-full blur-[120px] opacity-20"></div>
+                        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[120px] opacity-20"></div>
+                        <form onSubmit={handleLogin} className="w-full max-w-md bg-white/10 backdrop-blur-xl p-10 rounded-[3rem] border border-white/20 shadow-2xl space-y-8 relative z-10">
+                            <div className="text-center"><h1 className="text-5xl font-black text-white italic tracking-tighter mb-2">LAGLACE</h1><p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em]">Master Inventory Login</p></div>
+                            <div className="space-y-4">
+                                <input type="email" placeholder="EMAIL ADDRESS" className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 font-bold placeholder:text-slate-600" value="admin@laglace.com" />
+                                <input type="password" placeholder="PASSWORD" className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 font-bold placeholder:text-slate-600" value="••••••••" />
+                            </div>
+                            <button type="submit" className="w-full py-5 bg-white text-slate-900 rounded-2xl font-black hover:bg-blue-600 hover:text-white transition-all shadow-xl">AUTHORIZE ACCESS</button>
+                        </form>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex h-screen w-full overflow-hidden">
+                    {/* Sidebar */}
+                    <aside className="w-72 bg-white border-r flex flex-col h-full sticky top-0">
+                        <div className="p-8">
+                            <h1 className="text-2xl font-black text-pink-500 italic tracking-tighter flex items-center gap-2">
+                                <div className="w-8 h-8 bg-pink-500 rounded-lg flex items-center justify-center text-white text-xs">L</div>
+                                LAGLACE
+                            </h1>
+                        </div>
+                        <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+                            <button onClick={() => setActiveView('DASHBOARD')} className={`w-full text-left px-5 py-3 rounded-xl flex items-center gap-3 transition-all ${activeView === 'DASHBOARD' ? 'sidebar-active' : 'text-slate-600 hover:bg-slate-50 font-bold'}`}>📊 Dashboard</button>
+                            <div>
+                                <button onClick={() => setIsNewsExpanded(!isNewsExpanded)} className={`w-full text-left px-5 py-3 rounded-xl flex items-center justify-between font-bold ${activeView === 'NEWS' ? 'bg-pink-50 text-pink-600' : 'text-slate-600 hover:bg-slate-50'}`}><span>📢 Announcements</span><span className="text-[8px]">{isNewsExpanded ? '▼' : '▶'}</span></button>
+                                {isNewsExpanded && <div className="pl-6 space-y-1 mt-1">{announcements.map(a => <button key={a.id} onClick={() => setActiveView('NEWS')} className="w-full text-left p-2 rounded-lg text-[10px] font-bold text-slate-400 hover:text-pink-500 truncate border-l-2 border-slate-100 hover:border-pink-300 transition-all">{a.id}. {a.title}</button>)}</div>}
+                            </div>
+                            <button onClick={() => {setActiveView('INVENTORY'); setInventorySubView('manage');}} className={`w-full text-left px-5 py-3 rounded-xl flex items-center gap-3 transition-all ${activeView === 'INVENTORY' ? 'sidebar-active' : 'text-slate-600 hover:bg-slate-50 font-bold'}`}>📦 Inventory</button>
+                            <div className="pt-4 pb-2 text-[10px] font-black text-slate-400 px-5 uppercase tracking-widest">Operations</div>
+                            {['PURCHASING', 'INFLUENCER', 'AFFILIATE', 'WAREHOUSE'].map(v => (
+                                <button key={v} onClick={() => {setActiveView(v); setSubView('history');}} className={`w-full text-left px-5 py-3 rounded-xl flex items-center gap-3 transition-all ${activeView === v ? 'sidebar-active' : 'text-slate-600 hover:bg-slate-50 font-bold'}`}>{v === 'WAREHOUSE' ? '🏭' : '📁'} {v}</button>
+                            ))}
+                            <div className="pt-4 pb-2 text-[10px] font-black text-slate-400 px-5 uppercase tracking-widest">Advanced</div>
+                            <button onClick={() => setActiveView('AICHRAT')} className={`w-full text-left px-5 py-3 rounded-xl flex items-center gap-3 transition-all ${activeView === 'AICHRAT' ? 'sidebar-active' : 'text-slate-600 hover:bg-slate-50 font-bold'}`}>🤖 Talks with AI</button>
+                        </nav>
+                        <div className="p-6 bg-slate-50 border-t"><div className="flex items-center gap-3"><div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 font-black">P</div><div className="flex-1 overflow-hidden"><p className="text-xs font-black text-slate-800 truncate">{currentUser.name}</p><p className="text-[10px] text-slate-400 font-bold">{currentUser.role}</p></div></div></div>
+                    </aside>
+
+                    {/* Main Content */}
+                    <div className="flex-1 flex flex-col">
+                        <header className="h-20 bg-white border-b flex items-center justify-between px-10 sticky top-0 z-20">
+                            <div className="flex items-center gap-2"><span className="text-slate-400 text-xs font-bold uppercase tracking-widest">LAGLACE /</span><span className="text-sm font-black text-slate-800 uppercase italic">{activeView}</span></div>
+                            <div className="flex items-center gap-6">
+                                <div className="text-right"><p className="text-xs font-black text-slate-900">{currentUser.name}</p><p className="text-[9px] text-emerald-500 font-black uppercase tracking-widest">Live Syncing</p></div>
+                                <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center text-white text-sm font-black shadow-lg shadow-blue-100">P</div>
+                            </div>
+                        </header>
+                        <main className="flex-1 overflow-y-auto p-10 bg-slate-50/50">
+                            {activeView === 'DASHBOARD' && <DashboardView />}
+                            {activeView === 'INVENTORY' && <InventoryView />}
+                            {activeView === 'NEWS' && <NewsView />}
+                            {['PURCHASING', 'INFLUENCER', 'AFFILIATE', 'WAREHOUSE'].includes(activeView) && <OperationView view={activeView} />}
+                            {activeView === 'AICHRAT' && <AiChatView />}
+                        </main>
+                    </div>
+
+                    {notification && (
+                        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-8 py-4 rounded-3xl font-black text-xs shadow-2xl animate-in slide-in-from-bottom-8 flex items-center gap-3 z-50">
+                            <div className="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center text-[8px]">✓</div>{notification}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>

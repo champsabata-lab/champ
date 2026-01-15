@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAGLACE Master Stock Management v1.8</title>
+    
+    <!-- Core Dependencies (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+
+    <!-- Visual Identity & Typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,800;1,900&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --brand-pink: #ec4899;
+            --brand-blue: #2563eb;
+            --slate-primary: #0f172a;
+        }
+
+        body { 
+            font-family: 'Prompt', sans-serif; 
+            background-color: #f8fafc;
+            color: #1e293b;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Animations */
+        .animate-in { 
+            animation: fadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
+        }
+        
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(20px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+
+        .animate-pulse-slow { 
+            animation: pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite; 
+        }
+
+        @keyframes pulse { 
+            0%, 100% { opacity: 1; } 
+            50% { opacity: 0.7; } 
+        }
+
+        /* Scrollbar Aesthetics */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
+
+        /* UI Element Customization */
+        .sidebar-active { 
+            background: var(--brand-blue) !important; 
+            color: white !important; 
+            box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.3);
+            transform: scale(1.02);
+        }
+
+        .glass-header { 
+            background: rgba(255, 255, 255, 0.75); 
+            backdrop-filter: blur(16px); 
+            border-bottom: 1px solid rgba(226, 232, 240, 0.8); 
+        }
+
+        .card-shadow {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            transition: all 0.3s ease;
+        }
+        .card-shadow:hover {
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 10px 10px -5px rgba(0, 0, 0, 0.02);
+        }
+
+        .status-pill {
+            padding: 0.375rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.65rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-width: 1px;
+        }
+
+        .status-confirmed { background: #ecfdf5; color: #065f46; border-color: #10b98133; }
+        .status-pending { background: #fffbeb; color: #92400e; border-color: #f59e0b33; }
+        .status-cancelled { background: #fef2f2; color: #991b1b; border-color: #ef444433; }
+
+        /* Custom Shapes */
+        .rounded-xl-extreme { border-radius: 2.5rem; }
+        .rounded-2xl-extreme { border-radius: 3rem; }
+        .rounded-3xl-extreme { border-radius: 4rem; }
+
+        /* Input Focus Glow */
+        input:focus, select:focus, textarea:focus {
+            ring: 4px;
+            ring-color: rgba(37, 99, 235, 0.1);
+            border-color: #2563eb;
+        }
+
+        /* Image Mask for Premium Look */
+        .product-img-container {
+            position: relative;
+            overflow: hidden;
+            background: #f1f5f9;
+        }
+        .product-img-container img {
+            transition: transform 0.5s ease;
+        }
+        .product-img-container:hover img {
+            transform: scale(1.1);
+        }
+    </style>
+
+    <script type="importmap">
+    {
+      "imports": {
+        "@google/genai": "https://esm.sh/@google/genai@^1.35.0"
+      }
+    }
+    </script>
+</head>
+<body class="overflow-hidden">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { GoogleGenAI, Type } from "@google/genai";
+
+        // ==========================================
+        // 1. EXTENSIVE MOCK DATA (RESTORED)
+        // ==========================================
+
+        const PRODUCT_CATEGORIES = [
+          'เครื่องสำอาง (Makeup)', 'สกินแคร์ (Skincare)', 'อุปกรณ์ (Accessories)',
+          'น้ำหอม (Fragrance)', 'ของสมนาคุณ (Premiums)', 'อื่นๆ (Others)'
+        ];
+
+        const INITIAL_PRODUCTS = [
+          { id: 'P001', sku: 'LG-LIP-G01', name: 'Icy Glaze Gloss #01', unit: 'ชิ้น', category: 'เครื่องสำอาง (Makeup)', unitPrice: 289, stockPurchasing: 450, stockContent: 120, stockInfluencer: 300, stockLive: 800, stockAffiliate: 500, stockBuffer: 2500, lotNumber: 'LOT2401', mfd: '2024-01-10', exp: '2026-01-10', images: ['https://images.unsplash.com/photo-1586771107445-d3ca888129ff?w=400'] },
+          { id: 'P002', sku: 'LG-LIP-G02', name: 'Icy Glaze Gloss #02', unit: 'ชิ้น', category: 'เครื่องสำอาง (Makeup)', unitPrice: 289, stockPurchasing: 380, stockContent: 90, stockInfluencer: 250, stockLive: 720, stockAffiliate: 480, stockBuffer: 2200, lotNumber: 'LOT2401', mfd: '2024-01-10', exp: '2026-01-10', images: ['https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?w=400'] },
+          { id: 'P003', sku: 'LG-BLS-B01', name: 'Baebie Blush Pink', unit: 'ชิ้น', category: 'เครื่องสำอาง (Makeup)', unitPrice: 289, stockPurchasing: 800, stockContent: 250, stockInfluencer: 1200, stockLive: 3500, stockAffiliate: 2800, stockBuffer: 8500, lotNumber: 'LOT2403', mfd: '2024-03-05', exp: '2026-03-05', images: ['https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400'] },
+          { id: 'P004', sku: 'LG-ACC-M01', name: 'La Glace Mirror Case', unit: 'ชิ้น', category: 'อุปกรณ์ (Accessories)', unitPrice: 159, stockPurchasing: 150, stockContent: 50, stockInfluencer: 80, stockLive: 400, stockAffiliate: 200, stockBuffer: 1200, lotNumber: 'ACC23-A', mfd: '2023-11-20', exp: '2028-11-20', images: ['https://images.unsplash.com/photo-1523206489230-c012c64b2b48?w=400'] },
+          { id: 'P005', sku: 'LG-SKN-B01', name: 'Melt Away Balm', unit: 'ชิ้น', category: 'สกินแคร์ (Skincare)', unitPrice: 450, stockPurchasing: 600, stockContent: 100, stockInfluencer: 180, stockLive: 550, stockAffiliate: 300, stockBuffer: 1800, lotNumber: 'SKN24-02', mfd: '2024-02-15', exp: '2026-02-15', images: ['https://images.unsplash.com/photo-1556228720-195a672e8a03?w=400'] },
+          { id: 'P006', sku: 'LG-FRG-S01', name: 'Signature Perfume', unit: 'ขวด', category: 'น้ำหอม (Fragrance)', unitPrice: 590, stockPurchasing: 120, stockContent: 40, stockInfluencer: 60, stockLive: 150, stockAffiliate: 100, stockBuffer: 800, lotNumber: 'PER24-01', mfd: '2024-01-20', exp: '2027-01-20', images: ['https://images.unsplash.com/photo-1541643600914-78b084683601?w=400'] }
+        ];
+
+        const INITIAL_ORDERS = [
+          { id: 'ORD-1024', poNumber: 'PO-WATS-S01', source: 'purchasing', targetName: 'Watsons Siam Paragon', storeName: 'Watsons', subBranch: 'Siam Paragon', items: [{ productId: 'P001', productName: 'Icy Glaze Gloss #01', quantity: 150, unitPrice: 289 }, { productId: 'P003', productName: 'Baebie Blush Pink', quantity: 300, unitPrice: 289 }], totalValue: 130050, status: 'confirmed', requestedAt: '2024-05-15T10:00:00', processedAt: '2024-05-15T14:30:00', purchasingDept: 'คุณจอย' },
+          { id: 'ORD-1025', poNumber: 'IF-MIND-N01', source: 'influencer', targetName: 'คุณมายด์ (Mind N.)', influencerName: 'Mind N.', items: [{ productId: 'P003', productName: 'Baebie Blush Pink', quantity: 50, unitPrice: 289 }], totalValue: 14450, status: 'pending', requestedAt: '2024-05-16T09:15:00', purchasingDept: 'คุณแพรว' },
+          { id: 'ORD-1026', poNumber: 'AF-SHOPEE-V1', source: 'affiliate', targetName: 'Shopee Affiliate Team', items: [{ productId: 'P002', productName: 'Icy Glaze Gloss #02', quantity: 200, unitPrice: 289 }], totalValue: 57800, status: 'pending', requestedAt: '2024-05-16T11:00:00', purchasingDept: 'คุณแบงก์' },
+          { id: 'ORD-1027', poNumber: 'PO-7ELE-B02', source: 'purchasing', targetName: '7-Eleven Bangna', storeName: '7-Eleven', subBranch: 'Bangna', items: [{ productId: 'P001', productName: 'Icy Glaze Gloss #01', quantity: 50, unitPrice: 289 }], totalValue: 14450, status: 'confirmed', requestedAt: '2024-05-14T08:00:00', processedAt: '2024-05-14T11:20:00', purchasingDept: 'คุณแอน' },
+          { id: 'ORD-1028', poNumber: 'BUF-SOUTH-01', source: 'buffer', targetName: 'South Warehouse (Buffer)', items: [{ productId: 'P003', productName: 'Baebie Blush Pink', quantity: 1000, unitPrice: 289 }], totalValue: 289000, status: 'pending', requestedAt: '2024-05-16T13:40:00', purchasingDept: 'คุณประเสริฐ' }
+        ];
+
+        const INITIAL_STORES = [
+          { id: 'S1', name: 'Watsons', subBranches: ['Siam Paragon', 'Central World', 'EmQuartier'] },
+          { id: 'S2', name: '7-Eleven', subBranches: ['Bangna', 'Ladprao', 'Siam Square'] },
+          { id: 'S3', name: 'Beautrium', subBranches: ['Siam Center', 'Mega Bangna'] }
+        ];
+
+        const INITIAL_INFLUENCERS = [
+          { id: 'IF1', name: 'Mind N.' },
+          { id: 'IF2', name: 'Manee Channel' },
+          { id: 'IF3', name: 'Ploy Review' }
+        ];
+
+        const INITIAL_ANNOUNCEMENTS = [
+          { id: 1, title: 'นโยบายจัดส่ง Modern Trade', icon: '🚚', detail: 'ตรวจสอบใบกำกับภาษีและใบส่งของให้ครบถ้วนก่อนปล่อยรถออกจากคลัง...', color: 'blue', updatedAt: new Date().toISOString() },
+          { id: 2, title: 'ระวังสินค้า LOT2401', icon: '⚠️', detail: 'ตรวจพบการพิมพ์วันหมดอายุผิดพลาดในบางกล่อง กรุณาตรวจสอบก่อนแพ็ค...', color: 'red', updatedAt: new Date().toISOString() },
+          { id: 3, title: 'แผนจัดส่งไตรมาส 3', icon: '📅', detail: 'เตรียมเพิ่มเส้นทางจัดส่งฝั่งตะวันออก (ชลบุรี-ระยอง) ทุกวันพุธ...', color: 'emerald', updatedAt: new Date().toISOString() }
+        ];
+
+        // ==========================================
+        // 2. REACT LOGIC (PART 2)
+        // ==========================================
+
+        const useNotification = () => {
+          const [msg, setMsg] = React.useState(null);
+          const notify = (text) => {
+            setMsg(text);
+            setTimeout(() => setMsg(null), 3000);
+          };
+          return { msg, notify };
+        };
+
+        const App = () => {
+          const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+          const [currentUser, setCurrentUser] = React.useState({ name: 'คุณประเสริฐ (Admin)', role: 'Warehouse' });
+          const [activeView, setActiveView] = React.useState('DASHBOARD');
+          const [products, setProducts] = React.useState(INITIAL_PRODUCTS);
+          const [orders, setOrders] = React.useState(INITIAL_ORDERS);
+          const [announcements, setAnnouncements] = React.useState(INITIAL_ANNOUNCEMENTS);
+          const { msg: notification, notify } = useNotification();
+
+          // Inventory and Modals states
+          const [invSubView, setInvSubView] = React.useState('list'); 
+          const [editingProduct, setEditingProduct] = React.useState(null);
+
+          const getDisplayName = (v) => {
+            const map = {
+              'DASHBOARD': 'Dashboard', 'INVENTORY': 'Inventory Master', 'NEWS': 'Broadcast Hub',
+              'PURCHASING': 'Purchasing Dept', 'INFLUENCER_DEP': 'Influencer Dept', 'LIVE_DEP': 'Live Dept',
+              'AFFILIATE_DEP': 'Affiliate Dept', 'BUFFER_DEP': 'Buffer Stock', 'WAREHOUSE': 'Warehouse Fulfillment',
+              'AI_CHAT': 'Gemini AI Analyst', 'EXPORT': 'Analytics Export'
+            };
+            return map[v] || v;
+          };
+
+          const handleLogout = () => setIsLoggedIn(false);
+
+          // Dashboard Sub-component
+          const DashboardView = () => {
+            const confirmed = orders.filter(o => o.status === 'confirmed');
+            const totalUnits = confirmed.reduce((acc, o) => acc + o.items.reduce((s, i) => s + i.quantity, 0), 0);
+            const totalValue = confirmed.reduce((acc, o) => acc + o.totalValue, 0);
+
+            return (
+              <div className="space-y-8 animate-in">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {[
+                    { label: 'Confirmed Fulfillment', val: totalUnits.toLocaleString(), unit: 'Units', color: 'pink' },
+                    { label: 'Gross Modern Trade', val: '฿' + (totalValue / 1000).toFixed(1) + 'k', unit: 'Total', color: 'emerald' },
+                    { label: 'Pending Dispatch', val: orders.filter(o => o.status === 'pending').length, unit: 'Orders', color: 'amber' },
+                    { label: 'Total Global Stock', val: (products.reduce((acc, p) => acc + p.stockBuffer, 0) / 1000).toFixed(0) + 'k', unit: 'Buffer', color: 'blue' }
+                  ].map((s, i) => (
+                    <div key={i} className="bg-white p-6 rounded-[2.5rem] card-shadow border border-slate-100 flex flex-col justify-center">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{s.label}</p>
+                      <div className="flex items-baseline gap-2">
+                        <p className={`text-4xl font-black text-${s.color}-500 tracking-tighter`}>{s.val}</p>
+                        <span className="text-[10px] text-slate-300 font-bold uppercase">{s.unit}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="bg-white p-10 rounded-3xl card-shadow border border-slate-100 flex flex-col items-center justify-center min-h-[350px] relative overflow-hidden group">
+                     <div className="absolute inset-0 bg-gradient-to-br from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                     <p className="text-7xl grayscale opacity-10 mb-6 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-700 transform group-hover:scale-110">📈</p>
+                     <p className="font-black text-slate-300 text-[10px] uppercase tracking-widest text-center group-hover:text-blue-500 transition-colors">Real-time Stock Velocity Analysis Placeholder</p>
+                  </div>
+                  <div className="bg-white p-10 rounded-3xl card-shadow border border-slate-100 min-h-[350px] space-y-6">
+                    <div className="flex justify-between items-center border-b pb-4">
+                      <h3 className="font-black italic text-slate-800 uppercase text-xs tracking-widest">Global Broadcasts</h3>
+                      <button onClick={() => setActiveView('NEWS')} className="text-[10px] text-blue-500 font-bold hover:underline">View All</button>
+                    </div>
+                    {announcements.map(a => (
+                      <div key={a.id} className="flex items-start gap-4 p-4 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer">
+                        <span className="text-3xl">{a.icon}</span>
+                        <div>
+                          <p className="font-black text-sm text-slate-800">{a.title}</p>
+                          <p className="text-[11px] text-slate-400 line-clamp-1 leading-relaxed">{a.detail}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+          // Inventory Sub-component
+          const InventoryView = () => {
+            const handleSave = (e) => {
+              e.preventDefault();
+              const fd = new FormData(e.target);
+              const p = {
+                id: editingProduct?.id || 'P' + Date.now(),
+                name: fd.get('name'), sku: fd.get('sku'), category: fd.get('category'),
+                unitPrice: Number(fd.get('price')), stockBuffer: Number(fd.get('buffer')),
+                stockPurchasing: Number(fd.get('purchasing') || 0), 
+                stockContent: Number(fd.get('content') || 0),
+                stockInfluencer: Number(fd.get('influencer') || 0),
+                stockLive: Number(fd.get('live') || 0),
+                stockAffiliate: Number(fd.get('affiliate') || 0),
+                lotNumber: fd.get('lot'), mfd: fd.get('mfd'), exp: fd.get('exp'),
+                images: [editingProduct?.images[0] || 'https://images.unsplash.com/photo-1596462502278-27bfdc4033c8?w=400']
+              };
+              if (editingProduct) {
+                setProducts(prev => prev.map(old => old.id === p.id ? p : old));
+              } else {
+                setProducts(prev => [...prev, p]);
+              }
+              setInvSubView('list'); setEditingProduct(null);
+              notify('Inventory Record Synchronized');
+            };
+
+            if (invSubView === 'form') {
+              return (
+                <div className="max-w-5xl mx-auto space-y-8 animate-in">
+                  <div className="flex justify-between items-center"><h2 className="text-3xl font-black italic tracking-tighter">Inventory Specification</h2><button onClick={() => {setInvSubView('list'); setEditingProduct(null);}} className="text-slate-400 font-bold hover:underline">Discard</button></div>
+                  <form onSubmit={handleSave} className="bg-white p-12 rounded-[3.5rem] card-shadow border border-slate-100 space-y-10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                      <div className="space-y-6">
+                        <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Product Name</label><input name="name" required className="w-full p-5 bg-slate-50 rounded-2xl font-black text-lg outline-none" defaultValue={editingProduct?.name} /></div>
+                        <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">SKU Identity</label><input name="sku" required className="w-full p-5 bg-slate-50 rounded-2xl font-black outline-none" defaultValue={editingProduct?.sku} /></div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Category</label><select name="category" className="w-full p-5 bg-slate-50 rounded-2xl font-black appearance-none outline-none" defaultValue={editingProduct?.category}>{PRODUCT_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
+                          <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">MSRP (฿)</label><input name="price" type="number" className="w-full p-5 bg-slate-50 rounded-2xl font-black outline-none" defaultValue={editingProduct?.unitPrice} /></div>
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-10 rounded-[3rem] text-white space-y-6 shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+                        <h4 className="text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-white/10 pb-4">Internal Logistics Data</h4>
+                        <div className="grid grid-cols-2 gap-6">
+                           <div><label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">LOT Reference</label><input name="lot" className="w-full p-3 bg-white/5 border border-white/10 rounded-xl text-white font-bold text-xs" defaultValue={editingProduct?.lotNumber} /></div>
+                           <div><label className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Buffer Allotment</label><input name="buffer" type="number" className="w-full p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400 font-black text-sm" defaultValue={editingProduct?.stockBuffer} /></div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div><label className="text-[8px] font-black text-slate-500 uppercase">MFD Date</label><input type="date" name="mfd" className="w-full p-2 bg-white/5 rounded-xl text-xs" defaultValue={editingProduct?.mfd} /></div>
+                          <div><label className="text-[8px] font-black text-slate-500 uppercase">EXP Date</label><input type="date" name="exp" className="w-full p-2 bg-white/5 rounded-xl text-xs" defaultValue={editingProduct?.exp} /></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-end pt-6"><button type="submit" className="px-16 py-5 bg-blue-600 text-white rounded-3xl font-black shadow-2xl shadow-blue-100 hover:scale-105 transition-all uppercase tracking-widest text-sm">Commit Record</button></div>
+                  </form>
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-8 animate-in">
+                <div className="flex justify-between items-end">
+                   <div>
+                      <h2 className="text-3xl font-black italic tracking-tighter">Inventory Control Hub</h2>
+                      <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Master SKU Management & Warehouse Stock Levels</p>
+                   </div>
+                   <button onClick={() => {setEditingProduct(null); setInvSubView('form');}} className="px-8 py-4 bg-blue-600 text-white rounded-[2rem] font-black shadow-xl shadow-blue-100 hover:scale-105 transition-all text-sm">+ Add Item</button>
+                </div>
+                <div className="bg-white rounded-[3rem] card-shadow border border-slate-100 overflow-hidden overflow-x-auto">
+                   <table className="w-full text-left font-bold min-w-[1200px]">
+                      <thead className="bg-slate-900 text-slate-400 text-[9px] uppercase tracking-widest">
+                        <tr>
+                          <th className="p-8">Line Item / SKU</th>
+                          <th className="p-8">Category</th>
+                          <th className="p-8 bg-slate-800 text-blue-300 text-center">Purchasing</th>
+                          <th className="p-8 text-pink-300 text-center">Influencer</th>
+                          <th className="p-8 bg-slate-800 text-indigo-300 text-center">Affiliate</th>
+                          <th className="p-8 text-emerald-300 text-center">Buffer Total</th>
+                          <th className="p-8 text-center">Operations</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y text-xs">
+                        {products.map(p => (
+                          <tr key={p.id} className="hover:bg-slate-50/50 transition-colors group">
+                            <td className="p-8 flex items-center gap-6">
+                              <div className="w-16 h-16 rounded-2xl product-img-container border border-slate-100 shadow-sm"><img src={p.images[0]} className="w-full h-full object-cover" /></div>
+                              <div><p className="text-slate-900 font-black text-sm tracking-tight">{p.name}</p><p className="text-[10px] text-slate-300 uppercase font-black">{p.sku}</p></div>
+                            </td>
+                            <td className="p-8"><span className="bg-slate-100 text-slate-400 px-3 py-1.5 rounded-full text-[8px] font-black uppercase tracking-tighter">{p.category.split(' ')[0]}</span></td>
+                            <td className="p-8 text-center text-xl font-black bg-slate-50/30 text-slate-700">{p.stockPurchasing}</td>
+                            <td className="p-8 text-center text-xl font-black text-slate-700">{p.stockInfluencer}</td>
+                            <td className="p-8 text-center text-xl font-black bg-slate-50/30 text-slate-700">{p.stockAffiliate}</td>
+                            <td className="p-8 text-center text-xl font-black text-emerald-600 bg-emerald-50/20">{p.stockBuffer.toLocaleString()}</td>
+                            <td className="p-8 text-center"><button onClick={() => {setEditingProduct(p); setInvSubView('form');}} className="text-blue-500 font-black hover:underline underline-offset-4 tracking-widest text-[10px] uppercase">Modify Item</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                   </table>
+                </div>
+              </div>
+            );
+          };
+
+          // Generic Operational View
+          const OperationView = ({ view }) => {
+            const source = view.toLowerCase().replace('_dep', '');
+            const filtered = orders.filter(o => o.source === source);
+            
+            return (
+              <div className="space-y-8 animate-in">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-3xl font-black italic tracking-tighter">{getDisplayName(view)} Management</h2>
+                  <button onClick={() => notify('Transaction Logging Active')} className="px-10 py-4 bg-slate-900 text-white rounded-3xl font-black shadow-2xl hover:scale-105 transition-all text-xs tracking-widest uppercase">Create Log Entry</button>
+                </div>
+                <div className="bg-white rounded-[3rem] card-shadow border border-slate-100 overflow-hidden overflow-x-auto">
+                  <table className="w-full text-left font-bold min-w-[1000px]">
+                    <thead className="bg-slate-900 text-slate-400 text-[9px] uppercase tracking-widest">
+                      <tr>
+                        <th className="p-8">Log Identity / PO</th>
+                        <th className="p-8">Primary Target Entity</th>
+                        <th className="p-8">Inventory Items</th>
+                        <th className="p-8 text-center">Status</th>
+                        <th className="p-8 text-right">Value (฿)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y text-xs">
+                      {filtered.map(o => (
+                        <tr key={o.id} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="p-8">
+                            <p className="text-slate-900 font-black tracking-tight text-sm">{o.poNumber}</p>
+                            <p className="text-[9px] text-slate-300 font-black">UID: {o.id}</p>
+                          </td>
+                          <td className="p-8">
+                            <p className="text-slate-800 font-black">{o.targetName || o.storeName || o.influencerName}</p>
+                            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-black">{o.subBranch || 'Main Entity'}</p>
+                          </td>
+                          <td className="p-8">
+                            <div className="space-y-1">
+                               {o.items.map((item, idx) => (
+                                 <div key={idx} className="text-[10px] text-slate-500 font-bold flex items-center gap-2"><div className="w-1 h-1 bg-slate-200 rounded-full"></div> {item.productName} (x{item.quantity})</div>
+                               ))}
+                            </div>
+                          </td>
+                          <td className="p-8 text-center">
+                            <span className={`status-pill ${o.status === 'confirmed' ? 'status-confirmed' : 'status-pending'}`}>
+                              {o.status}
+                            </span>
+                          </td>
+                          <td className="p-8 text-right font-black text-slate-900 text-sm tracking-tight">฿{o.totalValue.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          };
+
+          const WarehouseView = () => {
+            const pending = orders.filter(o => o.status === 'pending');
+            
+            const handleConfirm = (id) => {
+              if (confirm('Verify warehouse readiness and confirm stock deduction?')) {
+                setOrders(prev => prev.map(o => {
+                  if (o.id === id) {
+                    o.items.forEach(item => {
+                      setProducts(prods => prods.map(p => {
+                        if (p.id === item.productId) {
+                          const key = 'stock' + (o.source.charAt(0).toUpperCase() + o.source.slice(1));
+                          const currentStock = p[key] || 0;
+                          return { ...p, [key]: Math.max(0, currentStock - item.quantity) };
+                        }
+                        return p;
+                      }));
+                    });
+                    return { ...o, status: 'confirmed', processedAt: new Date().toISOString() };
+                  }
+                  return o;
+                }));
+                notify('Stock deduction confirmed and order dispatched.');
+              }
+            };
+
+            return (
+              <div className="space-y-8 animate-in">
+                <div className="flex justify-between items-end">
+                   <div>
+                      <h2 className="text-3xl font-black italic tracking-tighter">Fulfillment Pipeline</h2>
+                      <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Orders Awaiting Warehouse Dispatch Verification</p>
+                   </div>
+                </div>
+                <div className="grid grid-cols-1 gap-8">
+                  {pending.map(o => (
+                    <div key={o.id} className="bg-white p-10 rounded-[3.5rem] card-shadow border border-slate-200 flex flex-col md:flex-row justify-between items-center gap-10 group transition-all hover:scale-[1.01]">
+                      <div className="flex-1 space-y-4">
+                        <div className="flex items-center gap-4">
+                           <span className="bg-slate-900 text-white text-[9px] px-4 py-1.5 rounded-full font-black uppercase tracking-[0.2em]">{o.source}</span>
+                           <h4 className="font-black text-2xl italic tracking-tight text-slate-800">{o.poNumber}</h4>
+                        </div>
+                        <p className="text-sm font-black text-slate-400 uppercase tracking-widest">Entity: <span className="text-slate-700">{o.targetName}</span></p>
+                        <div className="flex flex-wrap gap-2 pt-2">
+                          {o.items.map((i, idx) => (
+                            <span key={idx} className="bg-slate-50 border border-slate-100 px-4 py-1.5 rounded-2xl text-[10px] font-black text-slate-500 shadow-sm">
+                              {i.productName} (x{i.quantity})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-10 bg-slate-50/50 p-6 rounded-[2.5rem] border border-slate-100">
+                        <div className="text-right">
+                          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-1">Gross Value</p>
+                          <p className="text-2xl font-black italic text-slate-900 tracking-tighter">฿{o.totalValue.toLocaleString()}</p>
+                        </div>
+                        <button onClick={() => handleConfirm(o.id)} className="bg-emerald-600 text-white px-12 py-5 rounded-3xl font-black shadow-2xl shadow-emerald-100 hover:scale-105 transition-all text-xs tracking-widest uppercase">Confirm & Ship</button>
+                      </div>
+                    </div>
+                  ))}
+                  {pending.length === 0 && <div className="p-32 text-center text-slate-300 font-black italic tracking-widest bg-white border border-dashed border-slate-200 rounded-[3rem]">No Pending Shipments Found</div>}
+                </div>
+              </div>
+            );
+          };
+
+          const AiChatView = () => {
+            const [msgs, setMsgs] = React.useState([
+              { role: 'model', text: 'สวัสดีครับ! ผมคือ LAGLACE AI Analyst ยินดีที่ได้ช่วยคุณประเมินความเสี่ยงและแนวโน้มการขายในวันนี้ครับ ต้องการให้ผมตรวจสอบข้อมูลส่วนไหนก่อนดีครับ?' }
+            ]);
+            const [input, setInput] = React.useState('');
+            const [load, setLoad] = React.useState(false);
+
+            const send = async (e) => {
+              e.preventDefault();
+              if (!input.trim() || load) return;
+              const uTxt = input; setInput(''); setMsgs(p => [...p, { role: 'user', text: uTxt }]); setLoad(true);
+              try {
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                const model = ai.models.generateContent({ 
+                  model: 'gemini-3-flash-preview', 
+                  contents: uTxt,
+                  config: { systemInstruction: `Analyst for LAGLACE Cosmetics. Core Data: Inventory:${JSON.stringify(products)}, Sales History:${JSON.stringify(orders)}. You analyze stock risks, suggest buffer adjustments, and identify top sales entities. Always respond in professional Thai.` }
+                });
+                const res = await model;
+                setMsgs(p => [...p, { role: 'model', text: res.text || 'เกิดข้อผิดพลาดในการวิเคราะห์ข้อมูล' }]);
+              } catch (e) { setMsgs(p => [...p, { role: 'model', text: 'AI Sync Error: ไม่สามารถเชื่อมต่อระบบวิเคราะห์ได้ในขณะนี้' }]); }
+              finally { setLoad(false); }
+            };
+
+            return (
+              <div className="flex flex-col h-[calc(100vh-16rem)] max-w-5xl mx-auto bg-white rounded-[3rem] card-shadow border border-slate-100 overflow-hidden">
+                <div className="flex-1 overflow-y-auto p-10 space-y-8 bg-slate-50/30">
+                  {msgs.map((m, i) => (
+                    <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] p-6 rounded-[2.5rem] text-sm font-medium shadow-sm leading-relaxed ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white border border-slate-100 rounded-tl-none text-slate-700'}`}>{m.text}</div>
+                    </div>
+                  ))}
+                  {load && <div className="text-[10px] text-indigo-400 font-black uppercase tracking-widest animate-pulse ml-6">Gemini is processing context...</div>}
+                </div>
+                <form onSubmit={send} className="p-8 bg-white border-t border-slate-100 flex gap-6">
+                  <input className="flex-1 p-5 bg-slate-50 border-none rounded-2xl outline-none font-black text-sm" placeholder="Ask Gemini AI to analyze stock risks or sales trends..." value={input} onChange={e => setInput(e.target.value)} />
+                  <button className="px-12 bg-indigo-600 text-white rounded-2xl font-black shadow-2xl shadow-indigo-100 text-xs tracking-widest uppercase">Analyze</button>
+                </form>
+              </div>
+            );
+          };
+
+          const NewsView = () => (
+            <div className="max-w-5xl mx-auto space-y-10 animate-in">
+               <div className="flex justify-between items-end">
+                  <h2 className="text-3xl font-black italic tracking-tighter">Internal Broadcast Hub</h2>
+               </div>
+               <div className="grid gap-10">
+                  {announcements.map(item => (
+                    <div key={item.id} className="bg-white p-10 rounded-[4rem] border-2 border-transparent hover:border-slate-100 card-shadow transition-all group">
+                       <div className="flex gap-10 items-start">
+                          <div className={`w-24 h-24 rounded-[2.5rem] bg-${item.color}-50 flex items-center justify-center text-5xl shadow-inner border border-${item.color}-100`}>{item.icon}</div>
+                          <div className="flex-1 space-y-6">
+                             <h3 className="text-3xl font-black italic tracking-tight text-slate-800">{item.title}</h3>
+                             <div className="bg-slate-50/50 p-8 rounded-[3rem] border border-slate-100 shadow-inner">
+                                <p className="text-slate-600 font-medium leading-relaxed whitespace-pre-wrap">{item.detail}</p>
+                             </div>
+                             <div className="flex justify-between items-center">
+                                <p className="text-[9px] text-slate-300 font-black uppercase tracking-widest italic">Synced: {new Date(item.updatedAt).toLocaleString('th-TH')}</p>
+                                <span className={`px-4 py-1.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-${item.color}-100 text-${item.color}-600`}>Official HQ Directive</span>
+                             </div>
+                          </div>
+                       </div>
+                    </div>
+                  ))}
+               </div>
+            </div>
+          );
+
+          if (!isLoggedIn) {
+            return (
+              <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
+                <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-pink-500 rounded-full blur-[120px] opacity-20 animate-pulse-slow"></div>
+                <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[120px] opacity-20 animate-pulse-slow"></div>
+                <form onSubmit={(e) => {e.preventDefault(); setIsLoggedIn(true); notify('Authenticated Access Authorized');}} className="w-full max-w-md bg-white/10 backdrop-blur-3xl p-14 rounded-[4rem] border border-white/20 shadow-2xl space-y-10 relative z-10 animate-in">
+                  <div className="text-center">
+                    <h1 className="text-6xl font-black text-white italic tracking-tighter mb-2">LAGLACE</h1>
+                    <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.4em] ml-2">Internal Operations Portal</p>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">Identity</label><input className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 font-black" defaultValue="admin@laglace.com" /></div>
+                    <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-500 tracking-widest ml-1">Keyphrase</label><input type="password" placeholder="PASSWORD" className="w-full p-5 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500 font-black" defaultValue="••••••••" /></div>
+                  </div>
+                  <button type="submit" className="w-full py-5 bg-white text-slate-900 rounded-3xl font-black hover:bg-blue-600 hover:text-white transition-all shadow-2xl active:scale-95 uppercase tracking-widest text-xs">Authorize Entry</button>
+                </form>
+              </div>
+            );
+          }
+
+          return (
+            <div className="flex h-screen w-full overflow-hidden">
+              <aside className="w-80 bg-white border-r border-slate-200 flex flex-col h-full sticky top-0 z-40 transition-all duration-500">
+                <div className="p-10">
+                  <h1 className="text-3xl font-black text-pink-500 italic tracking-tighter flex items-center gap-3">
+                    <div className="w-10 h-10 bg-pink-500 rounded-2xl flex items-center justify-center text-white text-sm shadow-xl shadow-pink-100">L</div>
+                    LAGLACE
+                  </h1>
+                </div>
+                <nav className="flex-1 px-6 space-y-1 overflow-y-auto pb-6">
+                  <button onClick={() => setActiveView('DASHBOARD')} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === 'DASHBOARD' ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold'}`}>📊 Dashboard</button>
+                  <button onClick={() => setActiveView('INVENTORY')} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === 'INVENTORY' ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold'}`}>📦 Inventory</button>
+                  <button onClick={() => setActiveView('NEWS')} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === 'NEWS' ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold'}`}>📢 Broadcasts</button>
+                  <div className="pt-6 pb-2 text-[10px] font-black text-slate-300 px-5 uppercase tracking-[0.2em]">Operational</div>
+                  {['PURCHASING', 'INFLUENCER_DEP', 'LIVE_DEP', 'AFFILIATE_DEP', 'BUFFER_DEP'].map(v => (
+                    <button key={v} onClick={() => setActiveView(v)} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === v ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold uppercase text-[10px] tracking-widest'}`}>
+                      <span>📁 {getDisplayName(v).split(' ')[0]}</span>
+                    </button>
+                  ))}
+                  <button onClick={() => setActiveView('WAREHOUSE')} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === 'WAREHOUSE' ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold'}`}>🏭 Fulfillment</button>
+                  <div className="pt-6 pb-2 text-[10px] font-black text-slate-300 px-5 uppercase tracking-[0.2em]">Analysis</div>
+                  <button onClick={() => setActiveView('AI_CHAT')} className={`w-full text-left px-5 py-4 rounded-2xl flex items-center gap-4 transition-all ${activeView === 'AI_CHAT' ? 'sidebar-active font-black' : 'text-slate-500 hover:bg-slate-50 font-bold'}`}>🤖 Analyst AI</button>
+                </nav>
+                <div className="p-8 bg-slate-50 border-t flex items-center gap-4 group">
+                  <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 font-black shadow-inner border border-blue-200">P</div>
+                  <div className="flex-1 overflow-hidden">
+                    <p className="text-xs font-black text-slate-800 truncate">{currentUser.name}</p>
+                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest leading-none">{currentUser.role}</p>
+                  </div>
+                  <button onClick={handleLogout} className="text-slate-300 hover:text-red-500 transition-colors p-2">✕</button>
+                </div>
+              </aside>
+
+              <main className="flex-1 overflow-y-auto relative h-full">
+                <header className="h-24 glass-header flex items-center justify-between px-12 sticky top-0 z-30">
+                  <div className="flex items-center gap-3">
+                    <span className="text-slate-300 text-[10px] font-black uppercase tracking-widest">Master Control /</span>
+                    <span className="text-lg font-black text-slate-800 uppercase italic tracking-tighter">{getDisplayName(activeView)}</span>
+                  </div>
+                  <div className="flex items-center gap-8">
+                    <div className="hidden sm:block text-right">
+                      <p className="text-xs font-black text-slate-900 tracking-tight">{currentUser.name}</p>
+                      <p className="text-[9px] text-emerald-500 font-black uppercase tracking-[0.2em]">Authorized Access</p>
+                    </div>
+                    <div className="w-12 h-12 rounded-3xl bg-blue-600 flex items-center justify-center text-white text-sm font-black shadow-2xl shadow-blue-100 ring-4 ring-blue-50">P</div>
+                  </div>
+                </header>
+                <div className="p-12 max-w-[1500px] mx-auto">
+                   {activeView === 'DASHBOARD' && <DashboardView />}
+                   {activeView === 'INVENTORY' && <InventoryView />}
+                   {activeView === 'NEWS' && <NewsView />}
+                   {activeView === 'WAREHOUSE' && <WarehouseView />}
+                   {activeView === 'AI_CHAT' && <AiChatView />}
+                   {['PURCHASING', 'INFLUENCER_DEP', 'LIVE_DEP', 'AFFILIATE_DEP', 'BUFFER_DEP'].includes(activeView) && <OperationView view={activeView} />}
+                   {activeView === 'EXPORT' && <div className="p-32 text-center text-slate-300 font-black italic tracking-widest uppercase bg-white rounded-[4rem] card-shadow border border-dashed">High Precision Analytics Export Operational</div>}
+                </div>
+              </main>
+
+              {notification && (
+                <div className="fixed bottom-12 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-md text-white px-10 py-5 rounded-[2.5rem] font-black text-[10px] uppercase tracking-widest shadow-2xl animate-in slide-in-from-bottom-10 flex items-center gap-4 z-[100] border border-white/10">
+                  <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center text-[8px] text-white">✓</div>
+                  {notification}
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
