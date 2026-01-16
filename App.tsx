@@ -84,7 +84,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const saved = localStorage.getItem('laglace_v16_master');
     if (saved) {
-      const parsed = JSON.parse(saved);
+      // Fix: Cast parsed to any to resolve property access issues when JSON.parse result is treated as unknown
+      const parsed = JSON.parse(saved) as any;
       if (parsed.orders) setOrders(parsed.orders);
       if (parsed.products) setProducts(parsed.products);
       if (parsed.announcements) setAnnouncements(parsed.announcements);
@@ -160,7 +161,8 @@ const App: React.FC = () => {
     const files = e.target.files;
     if (!files) return;
 
-    Array.from(files).forEach(file => {
+    // Fix: Explicitly cast file to any to prevent 'unknown' being assigned to 'Blob' in readAsDataURL
+    Array.from(files).forEach((file: any) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         const base64 = reader.result as string;
@@ -445,15 +447,16 @@ const App: React.FC = () => {
                   <tr><th className="p-4 rounded-tl-2xl">รายการ</th><th className="p-4 text-center">จำนวน</th><th className="p-4 text-right rounded-tr-2xl">ราคา</th></tr>
                 </thead>
                 <tbody className="divide-y text-sm font-bold">
-                  {Object.entries(selectedItems).map(([pid, qty]) => {
+                  {/* Fix: Explicitly cast entries to handle 'unknown' qty types when using Object.entries on a Record in certain TS configurations */}
+                  {(Object.entries(selectedItems) as [string, any][]).map(([pid, qty]) => {
                     const p = products.find(x => x.id === pid)!;
                     return (
                       <tr key={pid}>
                         <td className="p-4">{p.name}</td>
                         <td className="p-4 flex items-center justify-center gap-4">
-                          <button onClick={() => setSelectedItems(prev => { const n = {...prev}; if(n[pid]>1) n[pid]--; else delete n[pid]; return n; })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors">-</button>
+                          <button onClick={() => setSelectedItems(prev => { const n = {...prev} as any; if(n[pid]>1) n[pid]--; else delete n[pid]; return n; })} className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 transition-colors">-</button>
                           <span>{qty}</span>
-                          <button onClick={() => setSelectedItems(prev => ({...prev, [pid]: prev[pid]+1}))} className="w-8 h-8 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition-colors">+</button>
+                          <button onClick={() => setSelectedItems(prev => ({...prev, [pid]: (prev[pid] || 0) + 1}))} className="w-8 h-8 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition-colors">+</button>
                         </td>
                         <td className="p-4 text-right">฿{(p.unitPrice * qty).toLocaleString()}</td>
                       </tr>
@@ -468,7 +471,8 @@ const App: React.FC = () => {
             <div className="flex justify-end"><button 
               disabled={Object.keys(selectedItems).length === 0}
               onClick={() => {
-              const items: OrderItem[] = Object.entries(selectedItems).map(([pid, qty]) => {
+              // Fix: Cast entries to any to prevent 'unknown' qty being assigned to number fields in OrderItem
+              const items: OrderItem[] = (Object.entries(selectedItems) as [string, any][]).map(([pid, qty]) => {
                 const p = products.find(x => x.id === pid)!;
                 return { productId: pid, productName: p.name, sku: p.sku, quantity: qty, originalQuantity: qty, unitPrice: p.unitPrice };
               });
