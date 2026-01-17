@@ -8,6 +8,9 @@ import NewsAnnouncement from './components/NewsAnnouncement';
 import { View, Order, Product, Store, UserAccount, Influencer, OrderItem, OrderSource, OrderStatus, Announcement } from './types';
 import { INITIAL_PRODUCTS, INITIAL_ORDERS, INITIAL_STORES, INITIAL_USERS, INITIAL_INFLUENCERS, INITIAL_ANNOUNCEMENTS, ALL_VIEWS, PURCHASING_VIEWS, PRODUCT_CATEGORIES } from './constants';
 
+// --- แก้ไขจุดที่ 1: เปลี่ยน API_BASE ให้เป็น Relative Path สำหรับ Hostinger ---
+const API_BASE = '/api'; 
+
 type SubView = 'history' | 'create' | 'details' | 'manage_inventory' | 'add_product';
 type WarehouseSubView = 'pending' | 'fulfillment_history';
 
@@ -26,9 +29,9 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
   const [announcements, setAnnouncements] = useState<Announcement[]>(INITIAL_ANNOUNCEMENTS);
   const [stores, setStores] = useState<Store[]>(INITIAL_STORES);
-  const [influencers] = useState<Influencer[]>(INITIAL_INFLUENCERS);
+  const [influencers, setInfluencers] = useState<Influencer[]>(INITIAL_INFLUENCERS);
   const [users, setUsers] = useState<UserAccount[]>(INITIAL_USERS);
-  
+   
   // Customization & Policy State
   const [loginWallpaper, setLoginWallpaper] = useState<string>('');
   const [allowRegistration, setAllowRegistration] = useState<boolean>(false);
@@ -39,7 +42,7 @@ const App: React.FC = () => {
   const [warehouseSubView, setWarehouseSubView] = useState<WarehouseSubView>('pending');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
-  
+   
   // Shipment Tracker Specific State
   const [selectedTrackingOrderId, setSelectedTrackingOrderId] = useState<string | null>(null);
   const [tempTrackingNumber, setTempTrackingNumber] = useState('');
@@ -80,26 +83,54 @@ const App: React.FC = () => {
   const [newUserPassword, setNewUserPassword] = useState('');
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
 
-  // Persistence
+  // --- DATA FETCHING LOGIC START (แก้ไขจุดที่ 2: เพิ่มการดึงข้อมูลจาก Server) ---
+  
+  // ฟังก์ชันดึงข้อมูล Influencers
+  const fetchInfluencers = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/influencers`);
+      if (response.ok) {
+        const data = await response.json();
+        setInfluencers(data);
+      }
+    } catch (err) {
+      console.error("Error connecting to Influencer API:", err);
+    }
+  };
+
+  // ฟังก์ชันดึงข้อมูล Orders (บิลขาย)
+  const fetchOrders = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/orders`); // เรียกไปที่ Backend
+      if (response.ok) {
+        const data = await response.json();
+        setOrders(data); // เอาข้อมูลจาก DB มาใส่ใน State
+      }
+    } catch (err) {
+      console.error("Error fetching orders:", err);
+    }
+  };
+
+  // เรียกใช้เมื่อเปิดหน้าเว็บ (useEffect)
   useEffect(() => {
+    fetchInfluencers();
+    fetchOrders(); // สั่งให้ดึงข้อมูลบิลขายด้วย
+
+    // โหลด Settings อื่นๆ จาก LocalStorage (เฉพาะที่ไม่สำคัญ)
     const saved = localStorage.getItem('laglace_v16_master');
     if (saved) {
-      // Fix: Cast parsed to any to resolve property access issues when JSON.parse result is treated as unknown
       const parsed = JSON.parse(saved) as any;
-      if (parsed.orders) setOrders(parsed.orders);
       if (parsed.products) setProducts(parsed.products);
-      if (parsed.announcements) setAnnouncements(parsed.announcements);
       if (parsed.stores) setStores(parsed.stores);
       if (parsed.users) setUsers(parsed.users);
       if (parsed.loginWallpaper) setLoginWallpaper(parsed.loginWallpaper);
-      if (parsed.allowRegistration !== undefined) setAllowRegistration(parsed.allowRegistration);
-      if (parsed.requireApproval !== undefined) setRequireApproval(parsed.requireApproval);
     }
   }, []);
+  // --- DATA FETCHING LOGIC END ---
 
+  // Persistence (เฉพาะข้อมูลที่ไม่ใช่ Transaction)
   useEffect(() => {
     localStorage.setItem('laglace_v16_master', JSON.stringify({ 
-      orders, 
       products, 
       announcements,
       stores, 
@@ -108,7 +139,7 @@ const App: React.FC = () => {
       allowRegistration,
       requireApproval
     }));
-  }, [orders, products, announcements, stores, users, loginWallpaper, allowRegistration, requireApproval]);
+  }, [products, announcements, stores, users, loginWallpaper, allowRegistration, requireApproval]);
 
   // Reset SubView when main view changes
   useEffect(() => {
@@ -161,7 +192,6 @@ const App: React.FC = () => {
     const files = e.target.files;
     if (!files) return;
 
-    // Fix: Explicitly cast file to any to prevent 'unknown' being assigned to 'Blob' in readAsDataURL
     Array.from(files).forEach((file: any) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -207,7 +237,7 @@ const App: React.FC = () => {
         if (status === 'confirmed' && o.status !== 'confirmed') {
           const source = o.source;
           const stockKey = `stock${source.charAt(0).toUpperCase() + source.slice(1)}` as keyof Product;
-          
+           
           setProducts(prevProds => prevProds.map(p => {
             const item = o.items.find(i => i.productId === p.id);
             if (item) {
@@ -316,6 +346,7 @@ const App: React.FC = () => {
           return { ...u, allowedViews: [...allowed, view] };
         }
       }
+      // Fix: Corrected the return variable from 'o' to 'u' to correctly reference the map item.
       return u;
     }));
   };
@@ -377,7 +408,7 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">วันที่</label>
                 <input type="date" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={createOrderForm.date} onChange={e => setCreateOrderForm({...createOrderForm, date: e.target.value})} />
               </div>
-              
+               
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หน้าร้านหลัก / แบรนด์</label>
                 <select className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none appearance-none" value={createOrderForm.storeId} onChange={e => setCreateOrderForm({...createOrderForm, storeId: e.target.value, subBranch: ''})}>
@@ -411,7 +442,7 @@ const App: React.FC = () => {
                   <h3 className="text-sm font-black text-slate-800 uppercase tracking-tighter italic">รายการสินค้า (Select Products)</h3>
                   <div className="flex flex-col md:flex-row gap-4">
                     <input type="text" placeholder="ค้นหาสินค้าเพื่อเพิ่มลงบิล..." className="px-4 py-3 bg-slate-100 rounded-xl text-xs font-bold outline-none w-full md:w-64 border-2 border-transparent focus:border-blue-500" value={productSearch} onChange={e => setProductSearch(e.target.value)} />
-                    
+                     
                     <div className="space-y-1">
                       <select 
                         className="p-3 bg-slate-100 rounded-xl text-xs font-bold outline-none border-2 border-transparent focus:border-blue-500 appearance-none min-w-[200px]"
@@ -447,7 +478,6 @@ const App: React.FC = () => {
                   <tr><th className="p-4 rounded-tl-2xl">รายการ</th><th className="p-4 text-center">จำนวน</th><th className="p-4 text-right rounded-tr-2xl">ราคา</th></tr>
                 </thead>
                 <tbody className="divide-y text-sm font-bold">
-                  {/* Fix: Explicitly cast entries to handle 'unknown' qty types when using Object.entries on a Record in certain TS configurations */}
                   {(Object.entries(selectedItems) as [string, any][]).map(([pid, qty]) => {
                     const p = products.find(x => x.id === pid)!;
                     return (
@@ -468,33 +498,54 @@ const App: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end"><button 
-              disabled={Object.keys(selectedItems).length === 0}
-              onClick={() => {
-              // Fix: Cast entries to any to prevent 'unknown' qty being assigned to number fields in OrderItem
-              const items: OrderItem[] = (Object.entries(selectedItems) as [string, any][]).map(([pid, qty]) => {
-                const p = products.find(x => x.id === pid)!;
-                return { productId: pid, productName: p.name, sku: p.sku, quantity: qty, originalQuantity: qty, unitPrice: p.unitPrice };
-              });
-              const newOrder: Order = {
-                id: `TXN-${Date.now().toString().slice(-6)}`,
-                poNumber: createOrderForm.poNumber || `BILL-${Date.now().toString().slice(-5)}`,
-                source: source,
-                targetName: selectedStore?.name || 'Unknown',
-                storeName: selectedStore?.name,
-                subBranch: createOrderForm.subBranch,
-                recipientName: createOrderForm.recipientName,
-                recipientAddress: createOrderForm.recipientAddress,
-                items: items,
-                totalValue: items.reduce((s, i) => s + (i.quantity * i.unitPrice), 0),
-                status: 'pending',
-                requestedAt: `${createOrderForm.date}T${createOrderForm.time}:00`,
-                purchasingDept: currentUser?.name || 'Unknown'
-              };
-              setOrders([newOrder, ...orders]);
-              setSubView('history');
-              showNotify(`บันทึกรายการ Walkout สำเร็จ!`);
-            }} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all disabled:opacity-20">ยืนยันรายการ Walkout</button></div>
+            <div className="flex justify-end">
+              <button 
+                disabled={Object.keys(selectedItems).length === 0}
+                // --- แก้ไขจุดที่ 3: เปลี่ยน onClick เป็น async และส่งข้อมูลไปที่ Backend ---
+                onClick={async () => {
+                const items: OrderItem[] = (Object.entries(selectedItems) as [string, any][]).map(([pid, qty]) => {
+                  const p = products.find(x => x.id === pid)!;
+                  return { productId: pid, productName: p.name, sku: p.sku, quantity: qty, originalQuantity: qty, unitPrice: p.unitPrice };
+                });
+
+                const newOrder: Order = {
+                  id: `TXN-${Date.now().toString().slice(-6)}`,
+                  poNumber: createOrderForm.poNumber || `BILL-${Date.now().toString().slice(-5)}`,
+                  source: source,
+                  targetName: selectedStore?.name || 'Unknown',
+                  storeName: selectedStore?.name,
+                  subBranch: createOrderForm.subBranch,
+                  recipientName: createOrderForm.recipientName,
+                  recipientAddress: createOrderForm.recipientAddress,
+                  items: items,
+                  totalValue: items.reduce((s, i) => s + (i.quantity * i.unitPrice), 0),
+                  status: 'pending',
+                  requestedAt: `${createOrderForm.date}T${createOrderForm.time}:00`,
+                  purchasingDept: currentUser?.name || 'Unknown'
+                };
+
+                // ส่งข้อมูลไปที่ Hostinger MySQL
+                try {
+                  const response = await fetch(`${API_BASE}/orders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newOrder)
+                  });
+
+                  if (response.ok) {
+                    // ถ้าบันทึกสำเร็จ ให้ดึงข้อมูลใหม่มาโชว์
+                    fetchOrders();
+                    setSubView('history');
+                    showNotify(`บันทึกรายการ Walkout ลงฐานข้อมูลสำเร็จ!`);
+                  } else {
+                    showNotify(`เกิดข้อผิดพลาด: ${response.statusText}`);
+                  }
+                } catch (error) {
+                  console.error(error);
+                  showNotify(`เชื่อมต่อ Server ไม่ได้`);
+                }
+
+              }} className="px-10 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all disabled:opacity-20">ยืนยันรายการ Walkout</button></div>
           </div>
         </div>
       );
@@ -505,12 +556,12 @@ const App: React.FC = () => {
       if (!order) return null;
       return (
         <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-300">
-           <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center">
               <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">รายละเอียดรายการ {order.poNumber}</h2>
               <button onClick={() => { setSubView('history'); setSelectedOrderId(null); }} className="px-6 py-2 bg-slate-100 text-slate-500 rounded-xl font-bold hover:bg-slate-200 transition-all">ย้อนกลับ</button>
-           </div>
-           
-           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="md:col-span-2 space-y-6">
                  <div className="bg-white p-8 rounded-[2.5rem] border shadow-sm">
                     <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6">รายการสินค้าในบิล</h3>
@@ -592,7 +643,7 @@ const App: React.FC = () => {
                     </div>
                  </div>
               </div>
-           </div>
+            </div>
         </div>
       );
     }
@@ -604,7 +655,7 @@ const App: React.FC = () => {
       <div className="space-y-10 animate-in fade-in">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <button onClick={() => setSubView('create')} className="px-10 py-5 bg-slate-900 text-white rounded-3xl font-black shadow-xl hover:scale-105 transition-all">บันทึก {viewTitle} ใหม่</button>
-          
+           
           <div className="relative w-full md:w-96 group">
              <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -697,7 +748,7 @@ const App: React.FC = () => {
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">SKU / รหัสสินค้า</label>
                     <input required type="text" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-black outline-none" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
                   </div>
-                  
+                   
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">หมวดหมู่สินค้า (Category)</label>
@@ -858,25 +909,25 @@ const App: React.FC = () => {
       return (
         <div className="space-y-8 animate-in fade-in">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-             <div>
-                <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">ประวัติการเบิกและปรับจํานวนสินค้า</h2>
-                <button onClick={() => setWarehouseSubView('pending')} className="mt-2 text-blue-600 text-sm font-bold hover:underline">← กลับไปที่รายการรอเบิก</button>
-             </div>
-             
-             <div className="relative w-full md:w-80 group">
-                <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
-                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                   </svg>
-                </div>
-                <input 
-                  type="text" 
-                  placeholder="ค้นหาประวัติเบิก..." 
-                  className="w-full pl-14 pr-5 py-4 bg-white border-2 border-slate-100 rounded-3xl text-sm font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 shadow-sm transition-all"
-                  value={historySearchQuery}
-                  onChange={(e) => setHistorySearchQuery(e.target.value)}
-                />
-             </div>
+              <div>
+                 <h2 className="text-3xl font-black text-slate-900 tracking-tighter italic">ประวัติการเบิกและปรับจํานวนสินค้า</h2>
+                 <button onClick={() => setWarehouseSubView('pending')} className="mt-2 text-blue-600 text-sm font-bold hover:underline">← กลับไปที่รายการรอเบิก</button>
+              </div>
+              
+              <div className="relative w-full md:w-80 group">
+                 <div className="absolute inset-y-0 left-5 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                 </div>
+                 <input 
+                   type="text" 
+                   placeholder="ค้นหาประวัติเบิก..." 
+                   className="w-full pl-14 pr-5 py-4 bg-white border-2 border-slate-100 rounded-3xl text-sm font-bold outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50/50 shadow-sm transition-all"
+                   value={historySearchQuery}
+                   onChange={(e) => setHistorySearchQuery(e.target.value)}
+                 />
+              </div>
           </div>
 
           <div className="bg-white rounded-[3rem] border shadow-sm overflow-hidden">
@@ -950,7 +1001,7 @@ const App: React.FC = () => {
                 onClick={() => setWarehouseSubView('fulfillment_history')}
                 className="mt-4 px-8 py-4 bg-slate-900 text-white rounded-2xl font-black shadow-xl hover:scale-105 transition-all flex items-center gap-3"
               >
-                 📜 ดูประวัติการเบิก
+                  📜 ดูประวัติการเบิก
               </button>
            </div>
            
@@ -987,71 +1038,71 @@ const App: React.FC = () => {
                
                <div className="p-8">
                   <div className="space-y-4">
-                     {o.items.map(item => (
-                       <div key={item.productId} className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group">
-                          <div className="flex items-center gap-4">
-                             <div className="w-12 h-12 bg-white rounded-xl border flex items-center justify-center text-xs font-black shadow-inner">
-                                {products.find(p => p.id === item.productId)?.sku.slice(-4) || 'SKU'}
-                             </div>
-                             <div>
-                                <p className="text-slate-900 font-black text-sm">{item.productName}</p>
-                                <p className="text-[10px] text-slate-400 font-bold">{item.sku}</p>
-                                {item.quantity !== item.originalQuantity && (
-                                   <p className="text-[9px] font-black uppercase text-amber-500">Original: {item.originalQuantity}</p>
-                                )}
-                             </div>
-                          </div>
-                          
-                          <div className="flex items-center gap-4 bg-white p-2 rounded-xl border shadow-sm">
-                             <button 
-                                onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity - 1)}
-                                className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-red-50 hover:text-red-500 transition-colors"
-                             >
-                                -
-                             </button>
-                             <input 
-                                type="number" 
-                                className="w-16 text-center font-black text-lg bg-transparent outline-none"
-                                value={item.quantity}
-                                onChange={(e) => adjustWarehouseOrderQty(o.id, item.productId, parseInt(e.target.value) || 0)}
-                             />
-                             <button 
-                                onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity + 1)}
-                                className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
-                             >
-                                +
-                             </button>
-                          </div>
-                          
-                          <div className="text-right min-w-[100px]">
-                             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Subtotal</p>
-                             <p className="font-black text-slate-900 italic">฿{(item.quantity * item.unitPrice).toLocaleString()}</p>
-                          </div>
-                       </div>
-                     ))}
+                      {o.items.map(item => (
+                        <div key={item.productId} className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100 group">
+                           <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 bg-white rounded-xl border flex items-center justify-center text-xs font-black shadow-inner">
+                                 {products.find(p => p.id === item.productId)?.sku.slice(-4) || 'SKU'}
+                              </div>
+                              <div>
+                                 <p className="text-slate-900 font-black text-sm">{item.productName}</p>
+                                 <p className="text-[10px] text-slate-400 font-bold">{item.sku}</p>
+                                 {item.quantity !== item.originalQuantity && (
+                                    <p className="text-[9px] font-black uppercase text-amber-500">Original: {item.originalQuantity}</p>
+                                 )}
+                              </div>
+                           </div>
+                           
+                           <div className="flex items-center gap-4 bg-white p-2 rounded-xl border shadow-sm">
+                              <button 
+                                 onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity - 1)}
+                                 className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-red-50 hover:text-red-500 transition-colors"
+                              >
+                                 -
+                              </button>
+                              <input 
+                                 type="number" 
+                                 className="w-16 text-center font-black text-lg bg-transparent outline-none"
+                                 value={item.quantity}
+                                 onChange={(e) => adjustWarehouseOrderQty(o.id, item.productId, parseInt(e.target.value) || 0)}
+                              />
+                              <button 
+                                 onClick={() => adjustWarehouseOrderQty(o.id, item.productId, item.quantity + 1)}
+                                 className="w-10 h-10 bg-slate-50 text-slate-900 rounded-lg flex items-center justify-center font-black hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
+                              >
+                                 +
+                              </button>
+                           </div>
+                           
+                           <div className="text-right min-w-[100px]">
+                              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Subtotal</p>
+                              <p className="font-black text-slate-900 italic">฿{(item.quantity * item.unitPrice).toLocaleString()}</p>
+                           </div>
+                        </div>
+                      ))}
                   </div>
                   
                   <div className="mt-8 flex flex-col md:flex-row justify-between items-center border-t pt-8 gap-6">
-                     <div className="flex items-center gap-4">
-                        <div className="text-left">
-                           <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Order Value</p>
-                           <p className="text-2xl font-black text-slate-900 italic">฿{o.totalValue.toLocaleString()}</p>
-                        </div>
-                     </div>
-                     <div className="flex gap-3">
-                        <button 
-                          onClick={() => setConfirmingOrder(o)}
-                          className="px-10 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
-                        >
-                           ✅ ตรวจสอบและยืนยันการเบิก
-                        </button>
-                        <button 
-                          onClick={() => updateOrderStatus(o.id, 'cancelled')}
-                          className="px-6 py-4 bg-red-100 text-red-600 rounded-2xl font-black hover:bg-red-200 transition-all"
-                        >
-                           ยกเลิก
-                        </button>
-                     </div>
+                      <div className="flex items-center gap-4">
+                         <div className="text-left">
+                            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Total Order Value</p>
+                            <p className="text-2xl font-black text-slate-900 italic">฿{o.totalValue.toLocaleString()}</p>
+                         </div>
+                      </div>
+                      <div className="flex gap-3">
+                         <button 
+                           onClick={() => setConfirmingOrder(o)}
+                           className="px-10 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-100 hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
+                         >
+                            ✅ ตรวจสอบและยืนยันการเบิก
+                         </button>
+                         <button 
+                           onClick={() => updateOrderStatus(o.id, 'cancelled')}
+                           className="px-6 py-4 bg-red-100 text-red-600 rounded-2xl font-black hover:bg-red-200 transition-all"
+                         >
+                            ยกเลิก
+                         </button>
+                      </div>
                   </div>
                </div>
             </div>
@@ -1241,22 +1292,22 @@ const App: React.FC = () => {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
-              <div>
-                <p className="font-black text-slate-800 text-sm">Allow Public Email Sign-up</p>
-                <p className="text-[10px] text-slate-400 font-bold uppercase">Users can register accounts via email</p>
-              </div>
-              <button onClick={() => setAllowRegistration(!allowRegistration)} className={`w-14 h-8 rounded-full transition-all relative ${allowRegistration ? 'bg-emerald-500' : 'bg-slate-300'}`}>
-                 <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${allowRegistration ? 'left-7' : 'left-1'}`}></div>
-              </button>
+             <div>
+               <p className="font-black text-slate-800 text-sm">Allow Public Email Sign-up</p>
+               <p className="text-[10px] text-slate-400 font-bold uppercase">Users can register accounts via email</p>
+             </div>
+             <button onClick={() => setAllowRegistration(!allowRegistration)} className={`w-14 h-8 rounded-full transition-all relative ${allowRegistration ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${allowRegistration ? 'left-7' : 'left-1'}`}></div>
+             </button>
            </div>
            <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
-              <div>
-                <p className="font-black text-slate-800 text-sm">Admin Approval Required</p>
-                <p className="text-[10px] text-slate-400 font-bold uppercase">New accounts must be enabled by an admin</p>
-              </div>
-              <button onClick={() => setRequireApproval(!requireApproval)} className={`w-14 h-8 rounded-full transition-all relative ${requireApproval ? 'bg-emerald-500' : 'bg-slate-300'}`}>
-                 <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${requireApproval ? 'left-7' : 'left-1'}`}></div>
-              </button>
+             <div>
+               <p className="font-black text-slate-800 text-sm">Admin Approval Required</p>
+               <p className="text-[10px] text-slate-400 font-bold uppercase">New accounts must be enabled by an admin</p>
+             </div>
+             <button onClick={() => setRequireApproval(!requireApproval)} className={`w-14 h-8 rounded-full transition-all relative ${requireApproval ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <div className={`absolute top-1 w-6 h-6 bg-white rounded-full transition-all ${requireApproval ? 'left-7' : 'left-1'}`}></div>
+             </button>
            </div>
         </div>
       </section>
@@ -1270,7 +1321,7 @@ const App: React.FC = () => {
             <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Granular Role Assignment</p>
           </div>
         </div>
-        
+         
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1 space-y-4 bg-slate-50 p-8 rounded-[2rem] border border-slate-100">
              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Create New Account</h4>
@@ -1316,14 +1367,14 @@ const App: React.FC = () => {
                                      <h5 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Functional Access</h5>
                                      <div className="grid grid-cols-2 gap-2">
                                         {[
-                                          { id: 'canManageAccounts', label: 'Manage Accounts' },
-                                          { id: 'canCreateProducts', label: 'Create Products' },
-                                          { id: 'canAdjustStock', label: 'Adjust Stock Manually' }
+                                           { id: 'canManageAccounts', label: 'Manage Accounts' },
+                                           { id: 'canCreateProducts', label: 'Create Products' },
+                                           { id: 'canAdjustStock', label: 'Adjust Stock Manually' }
                                         ].map(perm => (
-                                          <label key={perm.id} className="flex items-center gap-2 p-3 bg-white rounded-xl border cursor-pointer hover:border-indigo-300">
-                                             <input type="checkbox" checked={u[perm.id as keyof UserAccount] as boolean} onChange={() => toggleUserPermission(u.id, perm.id as keyof UserAccount)} />
-                                             <span className="text-[11px] font-bold text-slate-600">{perm.label}</span>
-                                          </label>
+                                           <label key={perm.id} className="flex items-center gap-2 p-3 bg-white rounded-xl border cursor-pointer hover:border-indigo-300">
+                                              <input type="checkbox" checked={u[perm.id as keyof UserAccount] as boolean} onChange={() => toggleUserPermission(u.id, perm.id as keyof UserAccount)} />
+                                              <span className="text-[11px] font-bold text-slate-600">{perm.label}</span>
+                                           </label>
                                         ))}
                                      </div>
                                   </div>
@@ -1331,10 +1382,10 @@ const App: React.FC = () => {
                                      <h5 className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">View Access</h5>
                                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                                         {ALL_VIEWS.map(v => (
-                                          <label key={v} className="flex items-center gap-2 p-2 bg-white rounded-lg border cursor-pointer hover:border-indigo-300">
-                                             <input type="checkbox" checked={u.allowedViews.includes(v)} onChange={() => toggleUserView(u.id, v)} />
-                                             <span className="text-[9px] font-bold text-slate-500 truncate">{v.replace('_DEP', '')}</span>
-                                          </label>
+                                           <label key={v} className="flex items-center gap-2 p-2 bg-white rounded-lg border cursor-pointer hover:border-indigo-300">
+                                              <input type="checkbox" checked={u.allowedViews.includes(v)} onChange={() => toggleUserView(u.id, v)} />
+                                              <span className="text-[9px] font-bold text-slate-500 truncate">{v.replace('_DEP', '')}</span>
+                                           </label>
                                         ))}
                                      </div>
                                   </div>
@@ -1377,8 +1428,8 @@ const App: React.FC = () => {
                      <div key={idx} className="flex justify-between items-center bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 group/item">
                         <span className="text-[10px] font-bold text-slate-500">{b}</span>
                         <button onClick={() => {
-                          const updated = stores.map(st => st.id === s.id ? { ...st, subBranches: st.subBranches?.filter((_, i) => i !== idx) } : st);
-                          setStores(updated);
+                           const updated = stores.map(st => st.id === s.id ? { ...st, subBranches: st.subBranches?.filter((_, i) => i !== idx) } : st);
+                           setStores(updated);
                         }} className="text-[8px] text-slate-300 opacity-0 group-hover/item:opacity-100 transition-opacity">✕</button>
                      </div>
                    ))}
@@ -1390,8 +1441,8 @@ const App: React.FC = () => {
                      className="w-full p-2 text-[10px] font-bold outline-none border rounded bg-slate-50 focus:bg-white"
                      onKeyDown={e => {
                         if (e.key === 'Enter') {
-                          handleAddBranch(s.id, (e.target as HTMLInputElement).value);
-                          (e.target as HTMLInputElement).value = '';
+                           handleAddBranch(s.id, (e.target as HTMLInputElement).value);
+                           (e.target as HTMLInputElement).value = '';
                         }
                      }}
                    />
@@ -1410,7 +1461,7 @@ const App: React.FC = () => {
             <p className="text-xs text-slate-400 font-bold uppercase tracking-tight">Login Screen & UI Theming</p>
           </div>
         </div>
-        
+         
         <div className="space-y-4">
            <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Login Wallpaper URL</label>
@@ -1446,7 +1497,7 @@ const App: React.FC = () => {
               <label htmlFor="wallpaper-upload" className="px-6 py-2 bg-white border rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-100">Browse Files...</label>
            </div>
         </div>
-        
+         
         {loginWallpaper && (
            <div className="w-full aspect-video rounded-[2rem] overflow-hidden border-8 border-slate-50 shadow-inner group relative">
               <img src={loginWallpaper} className="w-full h-full object-cover" alt="Wallpaper Preview" />
@@ -1470,7 +1521,7 @@ const App: React.FC = () => {
             <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[120px]"></div>
           </div>
         )}
-        
+         
         <form onSubmit={handleLogin} className="w-full max-md:max-w-md bg-white/10 backdrop-blur-xl p-10 rounded-[3rem] border border-white/20 shadow-2xl space-y-8 animate-in zoom-in-95 duration-500 relative z-10 mx-auto">
           <div className="text-center">
             <h1 className="text-5xl font-black text-white italic tracking-tighter mb-2">LAGLACE</h1>
@@ -1485,7 +1536,7 @@ const App: React.FC = () => {
           </div>
           {loginError && <p className="text-red-400 text-xs text-center font-bold bg-red-400/10 py-3 rounded-2xl border border-red-400/20">{loginError}</p>}
           <button type="submit" className="w-full py-5 bg-white text-slate-900 rounded-2xl font-black hover:bg-blue-600 hover:text-white transition-all shadow-xl active:scale-95">AUTHORIZE ACCESS</button>
-          
+           
           {allowRegistration && (
              <p className="text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-4">
                 No account? <button type="button" className="text-blue-400 hover:underline">Contact Admin to Request Access</button>
